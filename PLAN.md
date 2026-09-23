@@ -121,7 +121,7 @@ Build up in steps, measuring strength after each one (see Phase 6 tooling; a qui
 This plan fixes only stable things: phases, crate interfaces, the protocol, and each phase's "done when". Engine internals will change constantly; that is expected and is not tracked as stories.
 
 - **Git from day one.** Small commits. Commit message = what changed + measured result.
-- **`CHANGELOG.md`, one line per change**: date, what, bench signature, Elo/perft/puzzle result. This is the record of "did I already do this", not a ticket tracker.
+- **`CHANGELOG.md`, one line per change**: date, what, bench signature, Elo/perft/puzzle result. This is the record of "did I already do this", not a ticket tracker. Started with Engine A (CE-12), when algorithm experiments begin.
 - **Issue tracker is for bugs only.** A bug is closed only when a test reproduces it and passes.
 - **Always-on regression tests**, run before every commit:
   - perft on the reference positions (move generation),

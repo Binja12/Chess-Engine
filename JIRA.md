@@ -23,8 +23,6 @@ Done when: `cargo --version`, `python --version`, `stockfish` and `cutechess-cli
 Done when: `cargo test` passes on a workspace containing the `board` crate, git has a first commit. Other crates (engine-api, engine-ab, engine-nn, uci, arena, selfplay) are added when their epic starts.
 - `git init`, `.gitignore`, README stub
 - `Cargo.toml` workspace with an empty `board` crate
-- `CHANGELOG.md` created with the one-line format
-- `tests/` folder with a placeholder
 
 **CE-3 Rust basics done** (3)
 Done when: Rust Book chapters 1–10 read; a small scratch program using structs, enums, traits, `u64` bit ops, and a unit test compiles.
@@ -41,7 +39,7 @@ Done when: the `board` crate exposes our own `Position`, `Move`, `legal_moves()`
 - Define `Square`, `Piece`, `Color`, `Move` (u16 encoding) types
 - Define the `Position` API
 - Adapter over the library
-- FEN parse/print round-trip test
+- FEN parse/print round-trip test (creates `board/tests/`, the first integration test)
 - Perft test (start position depth 1–4)
 
 **CE-5 Bitboard core** (3)
@@ -67,7 +65,7 @@ Done when: FEN round-trips; make followed by unmake restores the position and ha
 - Round-trip test
 
 **CE-8 Legality and perft gate** (5)
-Done when: perft matches on all reference positions (start, Kiwipete, positions 3–6) to depth 5; move lists equal the library oracle on 10,000 random positions; nodes/second recorded in CHANGELOG.
+Done when: perft matches on all reference positions (start, Kiwipete, positions 3–6) to depth 5; move lists equal the library oracle on 10,000 random positions; nodes/second recorded in the PR description (copied into CHANGELOG when it starts in CE-12).
 - Legal filter (king-attacked check)
 - Perft with divide output
 - Reference position tests
@@ -105,6 +103,7 @@ Every story here ends with: bench signature recorded, puzzle set run, and a 200-
 
 **CE-12 Material eval + minimax** (1)
 Done when: fixed-depth search returns a legal move; a test proves depth-3 minimax finds a mate-in-1.
+- `CHANGELOG.md` created with the one-line format
 - Material evaluation
 - Minimax with depth limit
 - Mate-in-1 test
