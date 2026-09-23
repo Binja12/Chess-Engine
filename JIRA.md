@@ -47,6 +47,7 @@ Done when: the `board` crate exposes our own `Position`, `Move`, `legal_moves()`
 **CE-5 Bitboard core** (3)
 Done when: `Bitboard(u64)` type with set/clear/test/iterate/print, file/rank/diagonal masks, king/knight/pawn attack tables; all covered by unit tests.
 - `Bitboard` type and bit iteration
+- Bitwise operators for `Bitboard`: `&`, `|`, `^`, `!`, `&=`, `|=`, `^=`, `<<`, `>>`
 - Precomputed masks
 - King and knight tables
 - Pawn attack and push tables
