@@ -1,0 +1,30 @@
+# Rust
+/target/
+**/target/
+Cargo.lock.bak
+
+# Python
+training/.venv/
+__pycache__/
+*.pyc
+
+# Generated data and models (large; regenerate instead of committing)
+data/*.bin
+training/data/
+training/runs/
+*.pgn.gz
+
+# Editors and OS
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+.idea/
+Thumbs.db
+.DS_Store
+
+# Claude Code (local assistant config and instructions)
+claude.md
+CLAUDE.md
+CLAUDE.local.md
+.claude/
