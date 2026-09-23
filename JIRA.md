@@ -20,9 +20,9 @@ Done when: `cargo --version`, `python --version`, `stockfish` and `cutechess-cli
 - Download Stockfish and cutechess-cli, note paths in README
 
 **CE-2 Workspace skeleton** (1)
-Done when: `cargo test` passes on an empty workspace with all crates present, git has a first commit.
+Done when: `cargo test` passes on a workspace containing the `board` crate, git has a first commit. Other crates (engine-api, engine-ab, engine-nn, uci, arena, selfplay) are added when their epic starts.
 - `git init`, `.gitignore`, README stub
-- `Cargo.toml` workspace with empty crates: board, engine-api, engine-ab, engine-nn, uci, arena, selfplay
+- `Cargo.toml` workspace with an empty `board` crate
 - `CHANGELOG.md` created with the one-line format
 - `tests/` folder with a placeholder
 

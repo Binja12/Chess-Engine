@@ -22,3 +22,9 @@ training/runs/
 .idea/
 Thumbs.db
 .DS_Store
+
+# Claude Code (local assistant config and instructions)
+claude.md
+CLAUDE.md
+CLAUDE.local.md
+.claude/
