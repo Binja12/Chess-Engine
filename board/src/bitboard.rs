@@ -1,38 +1,54 @@
+//! `Bitboard`: a set of squares stored as one `u64`, one bit per square.
+//! Bit 0 = a1, bit 7 = h1, bit 56 = a8, bit 63 = h8 (`sq = rank * 8 + file`).
+
+/// A set of board squares: bit `sq` is 1 when square `sq` is in the set.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Bitboard {
     pub bits: u64,
 }
 impl Bitboard {
+    /// The empty set: no squares.
     pub const EMPTY: Bitboard = Bitboard { bits: 0 };
+    /// A bitboard holding only `sq`.
     pub fn from_square(sq: u8) -> Bitboard {
         Bitboard { bits: 1u64 << sq }
     }
+    /// True if `sq` is in the set.
     pub fn contains(self, sq: u8) -> bool {
         self.bits & (1u64 << sq) != 0
     }
+    /// Adds `sq` to the set. Setting it twice is the same as once.
     pub fn set(&mut self, sq: u8) {
         self.bits |= 1u64 << sq;
     }
+    /// Removes `sq` from the set. Does nothing if it is not there.
     pub fn clear(&mut self, sq: u8) {
         self.bits &= !(1u64 << sq);
     }
+    /// Number of squares in the set.
     pub fn count(self) -> u32 {
         self.bits.count_ones()
     }
+    /// True if the set has no squares.
     pub fn is_empty(self) -> bool {
         self == Bitboard::EMPTY
     }
+    /// The lowest square in the set. Must not be called on an empty bitboard (returns 64).
     pub fn lsb(self) -> u8 {
         self.bits.trailing_zeros() as u8
     }
+    /// Removes the lowest square from the set and returns it. Must not be called on an empty bitboard.
     pub fn pop_lsb(&mut self) -> u8 {
         let tmp = self.lsb();
         self.clear(tmp);
         tmp
     }
 }
+/// Iterates the squares from lowest (a1) to highest (h8), emptying the bitboard as it goes.
+/// Iterate over a copy (`for sq in bb`) to keep the original.
 impl Iterator for Bitboard {
     type Item = u8;
+    /// The next lowest square, or `None` when no squares are left.
     fn next(&mut self) -> Option<u8> {
         match self.is_empty() {
             true => None,
@@ -40,6 +56,8 @@ impl Iterator for Bitboard {
         }
     }
 }
+/// Prints the board as 8 lines of `X` (in the set) and `.` (not in the set),
+/// rank 8 on top and the a-file on the left, as seen from White's side.
 impl std::fmt::Display for Bitboard {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         const SIZE: u8 = 8;
@@ -56,6 +74,7 @@ impl std::fmt::Display for Bitboard {
         Ok(())
     }
 }
+/// `a & b`: squares in both sets (intersection).
 impl std::ops::BitAnd for Bitboard {
     type Output = Self;
     fn bitand(self, rhs: Self) -> Self::Output {
@@ -64,6 +83,7 @@ impl std::ops::BitAnd for Bitboard {
         }
     }
 }
+/// `a | b`: squares in either set (union).
 impl std::ops::BitOr for Bitboard {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self::Output {
@@ -72,12 +92,14 @@ impl std::ops::BitOr for Bitboard {
         }
     }
 }
+/// `!a`: every square not in the set (complement).
 impl std::ops::Not for Bitboard {
     type Output = Self;
     fn not(self) -> Self::Output {
         Bitboard { bits: !self.bits }
     }
 }
+/// `a ^ b`: squares in exactly one of the two sets.
 impl std::ops::BitXor for Bitboard {
     type Output = Self;
     fn bitxor(self, rhs: Self) -> Self::Output {
@@ -86,21 +108,27 @@ impl std::ops::BitXor for Bitboard {
         }
     }
 }
+/// `a &= b`: same as `a = a & b`.
 impl std::ops::BitAndAssign for Bitboard {
     fn bitand_assign(&mut self, rhs: Self) {
         *self = *self & rhs;
     }
 }
+/// `a |= b`: same as `a = a | b`.
 impl std::ops::BitOrAssign for Bitboard {
     fn bitor_assign(&mut self, rhs: Self) {
         *self = *self | rhs;
     }
 }
+/// `a ^= b`: same as `a = a ^ b`.
 impl std::ops::BitXorAssign for Bitboard {
     fn bitxor_assign(&mut self, rhs: Self) {
         *self = *self ^ rhs;
     }
 }
+/// `a << n`: moves every square up by `n` bits (`<< 8` = one rank up).
+/// Squares pushed past h8 are dropped. Sideways shifts wrap from the h-file
+/// to the next rank's a-file; mask with `FILE_H` first to prevent that.
 impl std::ops::Shl<u8> for Bitboard {
     type Output = Self;
     fn shl(self, rhs: u8) -> Self::Output {
@@ -109,6 +137,9 @@ impl std::ops::Shl<u8> for Bitboard {
         }
     }
 }
+/// `a >> n`: moves every square down by `n` bits (`>> 8` = one rank down).
+/// Squares pushed below a1 are dropped. Sideways shifts wrap from the a-file
+/// to the previous rank's h-file; mask with `FILE_A` first to prevent that.
 impl std::ops::Shr<u8> for Bitboard {
     type Output = Self;
     fn shr(self, rhs: u8) -> Self::Output {
