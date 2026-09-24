@@ -33,12 +33,14 @@ impl Bitboard {
     pub fn is_empty(self) -> bool {
         self == Bitboard::EMPTY
     }
-    /// The lowest square in the set. Must not be called on an empty bitboard (returns 64).
+    /// The lowest square in the set. Panics in debug builds if the bitboard is empty.
     pub fn lsb(self) -> u8 {
+        debug_assert!(!self.is_empty(), "lsb of empty bitboard");
         self.bits.trailing_zeros() as u8
     }
-    /// Removes the lowest square from the set and returns it. Must not be called on an empty bitboard.
+    /// Removes the lowest square from the set and returns it. Panics in debug builds if the bitboard is empty.
     pub fn pop_lsb(&mut self) -> u8 {
+        debug_assert!(!self.is_empty(), "lsb of empty bitboard");
         let tmp = self.lsb();
         self.clear(tmp);
         tmp
@@ -223,6 +225,21 @@ mod tests {
         assert_eq!(bb.bits, 0b1000);
         assert_eq!(bb.pop_lsb(), 3);
         assert!(bb.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "empty bitboard")]
+    #[cfg(debug_assertions)]
+    fn lsb_of_empty_panics() {
+        Bitboard::EMPTY.lsb();
+    }
+
+    #[test]
+    #[should_panic(expected = "empty bitboard")]
+    #[cfg(debug_assertions)]
+    fn pop_lsb_of_empty_panics() {
+        let mut bb = Bitboard::EMPTY;
+        bb.pop_lsb();
     }
 
     #[test]
