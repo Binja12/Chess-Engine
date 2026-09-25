@@ -62,7 +62,7 @@ Each phase ends with something runnable and testable. Rough durations assume par
 
 ### Phase 1 – Board and move generation, from scratch (2–3 weeks)
 Build in this order; each step has its own tests.
-1. **Bitboard basics**: `Bitboard(u64)` type, square indexing (a1 = 0 … h8 = 63), set/clear/test bit, iterate set bits, pretty-print. Precomputed masks: files, ranks, diagonals.
+1. **Bitboard basics**: `Bitboard(u64)` type, square indexing (a1 = 0 … h8 = 63; files and ranks are 0-based too: file a = 0 … h = 7, rank 1 = 0 … rank 8 = 7, so `sq = rank * 8 + file`; human names like `FILE_A`, `RANK_1`, `E4` are constants, and text like "e4" is converted only at the FEN/UCI boundary), set/clear/test bit, iterate set bits, pretty-print. Precomputed masks: files, ranks, diagonals.
 2. **Position struct**: 12 piece bitboards (6 piece types × 2 colors), occupancy by color, side to move, castling rights, en passant square, halfmove clock, fullmove number. FEN parse and print, round-trip tested.
 3. **Non-sliding attacks**: lookup tables for king, knight, and pawn attacks (64 entries each, computed at startup or as `const`).
 4. **Sliding attacks** (rook, bishop, queen): first a simple ray-walking version so everything else can proceed, then **magic bitboards** as the algorithmic centrepiece: precomputed attack tables indexed by (square, hashed relevant occupancy). Both versions kept and cross-tested.
