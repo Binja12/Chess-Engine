@@ -28,6 +28,9 @@ pub const RANK_1: Bitboard = Bitboard {
 pub const RANK_8: Bitboard = Bitboard {
     bits: 0xFF00_0000_0000_0000,
 };
+pub const INNER_MASK: Bitboard = Bitboard {
+    bits: 0x007E_7E7E_7E7E_7E00,
+};
 
 /// All 8 squares of `file` (0 = a … 7 = h).
 pub fn file_mask(file: u8) -> Bitboard {
