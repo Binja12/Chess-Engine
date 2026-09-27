@@ -7,6 +7,7 @@
 use crate::attack_sliders::*;
 use crate::bitboard::Bitboard;
 use crate::masks::{FILE_A, FILE_H, INNER_MASK, RANK_1, RANK_8, file_mask, rank_mask};
+use std::sync::LazyLock;
 
 /// Which sliding piece a mask or magic belongs to. The queen has none: it is rook | bishop.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -15,6 +16,11 @@ pub enum Slider {
     Rook,
     Bishop,
 }
+
+/// Slots in the rook attack table: the sum of 2^(mask bits) over all 64 squares.
+pub const ROOK_TABLE_SIZE: usize = 102_400;
+/// Slots in the bishop attack table: the sum of 2^(mask bits) over all 64 squares.
+pub const BISHOP_TABLE_SIZE: usize = 5_248;
 
 /// Rook magic for every square, found by `find_magic` from seed `0x9E37_79B9_7F4A_7C15`.
 /// Regenerate with the ignored `generate_magics` test; `stored_magics_are_valid` re-checks them.
@@ -254,10 +260,100 @@ impl Rng {
     }
 }
 
+/// Everything one square needs for a magic lookup: which squares matter, the multiplier,
+/// how many index bits, and where this square's slots start in the shared `attacks` vector.
+#[derive(Clone, Copy, Debug)]
+pub struct MagicEntry {
+    pub mask: Bitboard,
+    pub magic: u64,
+    pub bits: u32,
+    pub offset: usize,
+}
+
+/// All magic attack tables for one slider, in one flat vector (layout A): square `sq` owns the
+/// slots `offset .. offset + 2^bits` of `attacks`, one per blocker pattern.
+pub struct MagicTable {
+    entries: [MagicEntry; 64],
+    attacks: Vec<Bitboard>,
+}
+
+impl MagicTable {
+    /// The attacks of this slider on `sq` given `occupied`: mask, multiply, shift, one read.
+    pub fn lookup(&self, sq: u8, occupied: Bitboard) -> Bitboard {
+        let entry = self.entries[sq as usize];
+        let index = magic_index(occupied & entry.mask, entry.magic, entry.bits);
+        self.attacks[entry.offset + index]
+    }
+}
+
+/// Builds the table for `slider` from the stored magics: for every square and every blocker
+/// pattern, stores `*_attacks_ray` at the pattern's slot.
+fn build_table(slider: Slider) -> MagicTable {
+    let mut offset = 0;
+    // 64 placeholder entries, each overwritten in the loop
+    let mut entries = [MagicEntry {
+        mask: Bitboard::EMPTY,
+        magic: 0,
+        bits: 0,
+        offset: 0,
+    }; 64];
+    let size = match slider {
+        Slider::Rook => ROOK_TABLE_SIZE,
+        Slider::Bishop => BISHOP_TABLE_SIZE,
+    };
+    let mut attacks = vec![Bitboard::EMPTY; size];
+    for sq in 0..64 {
+        let mask = match slider {
+            Slider::Rook => rook_mask(sq),
+            Slider::Bishop => bishop_mask(sq),
+        };
+        let magic = match slider {
+            Slider::Rook => ROOK_MAGICS[sq as usize],
+            Slider::Bishop => BISHOP_MAGICS[sq as usize],
+        };
+        let bits = mask.count();
+        // the entry belongs to the square: built once, with all its fields at once
+        entries[sq as usize] = MagicEntry {
+            mask,
+            magic,
+            bits,
+            offset,
+        };
+        for pattern in subsets(mask) {
+            let answer = match slider {
+                Slider::Rook => rook_attacks_ray(sq, pattern),
+                Slider::Bishop => bishop_attacks_ray(sq, pattern),
+            };
+            attacks[offset + magic_index(pattern, magic, bits)] = answer;
+        }
+        // the next square's slots start after this square's 2^bits slots
+        offset += 2usize.pow(bits);
+    }
+    MagicTable { entries, attacks }
+}
+
+/// Rook tables, built on first use.
+static ROOK_TABLE: LazyLock<MagicTable> = LazyLock::new(|| build_table(Slider::Rook));
+/// Bishop tables, built on first use.
+static BISHOP_TABLE: LazyLock<MagicTable> = LazyLock::new(|| build_table(Slider::Bishop));
+
+/// Rook attacks from `sq` given `occupied`, by magic lookup in `ROOK_TABLE`.
+/// Move generation calls `attacks::rook_attacks`, which picks this (or PEXT, later).
+pub fn rook_attacks_magic(sq: u8, occupied: Bitboard) -> Bitboard {
+    ROOK_TABLE.lookup(sq, occupied)
+}
+
+/// Bishop attacks from `sq` given `occupied`, by magic lookup in `BISHOP_TABLE`.
+/// Move generation calls `attacks::bishop_attacks`, which picks this (or PEXT, later).
+pub fn bishop_attacks_magic(sq: u8, occupied: Bitboard) -> Bitboard {
+    BISHOP_TABLE.lookup(sq, occupied)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::attack_sliders::{bishop_attacks_ray, rook_attacks_ray};
+    use crate::attacks::king_attacks;
     use crate::masks::{FILE_A, FILE_H, RANK_1, RANK_8};
 
     /// Builds a bitboard from a list of squares.
@@ -347,8 +443,8 @@ mod tests {
             rook += 1 << rook_mask(sq).count();
             bishop += 1 << bishop_mask(sq).count();
         }
-        assert_eq!(rook, 102_400);
-        assert_eq!(bishop, 5_248);
+        assert_eq!(rook, ROOK_TABLE_SIZE);
+        assert_eq!(bishop, BISHOP_TABLE_SIZE);
     }
     #[test]
     fn mask_lemma_squares_outside_the_mask_never_matter() {
@@ -519,6 +615,154 @@ mod tests {
             let a = find_magic(Slider::Rook, sq, &mut Rng::new(SEED));
             let b = find_magic(Slider::Rook, sq, &mut Rng::new(SEED));
             assert_eq!(a, b, "square {sq}");
+        }
+    }
+
+    // magic attack tables
+    /// Every square occupied.
+    const FULL: Bitboard = Bitboard { bits: u64::MAX };
+
+    /// A few fixed boards used by several tests.
+    const BOARDS: [Bitboard; 5] = [
+        Bitboard::EMPTY,
+        FULL,
+        Bitboard {
+            bits: 0xFFFF_0000_0000_FFFF,
+        }, // start position
+        Bitboard {
+            bits: 0x0000_1824_4200_0000,
+        }, // a few centre pieces
+        Bitboard {
+            bits: 0x55AA_55AA_55AA_55AA,
+        }, // checkerboard
+    ];
+
+    #[test]
+    fn every_pattern_matches_ray_walking() {
+        // the complete proof: all 64 squares x all 2^bits patterns, 107,648 checks
+        for sq in 0..64 {
+            for pattern in subsets(rook_mask(sq)) {
+                assert_eq!(
+                    rook_attacks_magic(sq, pattern),
+                    rook_attacks_ray(sq, pattern),
+                    "rook {sq} {:#x}",
+                    pattern.bits
+                );
+            }
+            for pattern in subsets(bishop_mask(sq)) {
+                assert_eq!(
+                    bishop_attacks_magic(sq, pattern),
+                    bishop_attacks_ray(sq, pattern),
+                    "bishop {sq} {:#x}",
+                    pattern.bits
+                );
+            }
+        }
+    }
+    #[test]
+    fn table_layout() {
+        for (table, magics, total) in [
+            (&*ROOK_TABLE, &ROOK_MAGICS, ROOK_TABLE_SIZE),
+            (&*BISHOP_TABLE, &BISHOP_MAGICS, BISHOP_TABLE_SIZE),
+        ] {
+            assert_eq!(table.attacks.len(), total);
+            assert_eq!(table.entries[0].offset, 0);
+            for (sq, (entry, &magic)) in table.entries.iter().zip(magics).enumerate() {
+                assert_eq!(entry.magic, magic, "square {sq}");
+                assert_eq!(entry.bits, entry.mask.count(), "square {sq}");
+            }
+            // each square's slots start right after the previous square's
+            for (sq, pair) in table.entries.windows(2).enumerate() {
+                assert_eq!(
+                    pair[1].offset,
+                    pair[0].offset + (1 << pair[0].bits),
+                    "square {sq}"
+                );
+            }
+        }
+        for sq in 0..64 {
+            assert_eq!(ROOK_TABLE.entries[sq as usize].mask, rook_mask(sq));
+            assert_eq!(BISHOP_TABLE.entries[sq as usize].mask, bishop_mask(sq));
+        }
+    }
+    #[test]
+    fn pieces_outside_the_mask_are_ignored() {
+        // "board 2" from the demo: many pieces, but the rook on d4 only sees g4 and d7
+        let board2 = squares(&[4, 59, 31, 24, 51, 30, 0, 63, 10, 45, 44]);
+        assert_eq!(
+            rook_attacks_magic(27, board2),
+            rook_attacks_magic(27, squares(&[30, 51]))
+        );
+        assert_eq!(rook_attacks_magic(27, board2), rook_attacks_ray(27, board2));
+        // bishop on d4: pieces on straight lines (d5 e4) and on ray ends (h8 a1 a7 g1) change nothing
+        let straight_and_ends = squares(&[35, 28, 63, 0, 48, 6]);
+        assert_eq!(
+            bishop_attacks_magic(27, straight_and_ends),
+            bishop_attacks_magic(27, Bitboard::EMPTY)
+        );
+    }
+    #[test]
+    fn demo_example_g4_d7() {
+        // rook d4 blocked by g4 and d7: d1 d2 d3, a4 b4 c4, e4 f4 g4, d5 d6 d7
+        let expected = squares(&[3, 11, 19, 24, 25, 26, 28, 29, 30, 35, 43, 51]);
+        assert_eq!(rook_attacks_magic(27, squares(&[30, 51])), expected);
+    }
+    #[test]
+    fn own_square_is_ignored() {
+        for board in BOARDS {
+            for sq in 0..64 {
+                let with = board | squares(&[sq]);
+                let mut without = board;
+                without.clear(sq);
+                assert_eq!(
+                    rook_attacks_magic(sq, with),
+                    rook_attacks_magic(sq, without),
+                    "rook {sq}"
+                );
+                assert_eq!(
+                    bishop_attacks_magic(sq, with),
+                    bishop_attacks_magic(sq, without),
+                    "bishop {sq}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn empty_board_totals() {
+        let mut rook = 0;
+        let mut bishop = 0;
+        for sq in 0..64 {
+            rook += rook_attacks_magic(sq, Bitboard::EMPTY).count();
+            bishop += bishop_attacks_magic(sq, Bitboard::EMPTY).count();
+        }
+        assert_eq!(rook, 896);
+        assert_eq!(bishop, 560);
+    }
+    #[test]
+    fn full_board_rook_plus_bishop_is_king() {
+        for sq in 0..64 {
+            assert_eq!(
+                rook_attacks_magic(sq, FULL) | bishop_attacks_magic(sq, FULL),
+                king_attacks(sq),
+                "square {sq}"
+            );
+        }
+    }
+    #[test]
+    fn corners_match_ray_walking() {
+        for sq in [0, 7, 56, 63] {
+            for board in [Bitboard::EMPTY, FULL] {
+                assert_eq!(
+                    rook_attacks_magic(sq, board),
+                    rook_attacks_ray(sq, board),
+                    "rook {sq}"
+                );
+                assert_eq!(
+                    bishop_attacks_magic(sq, board),
+                    bishop_attacks_ray(sq, board),
+                    "bishop {sq}"
+                );
+            }
         }
     }
 }
