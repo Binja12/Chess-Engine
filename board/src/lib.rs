@@ -4,3 +4,5 @@ pub mod bitboard;
 pub mod color;
 pub mod magic_bitboards;
 pub mod masks;
+pub mod piece;
+pub mod square;
