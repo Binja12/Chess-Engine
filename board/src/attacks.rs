@@ -1,9 +1,11 @@
-//! Attack tables for the pieces whose attacks depend only on their square (and colour, for pawns):
-//! knight, king, pawn. Each table is built once, on first use, from its `build_*` function.
-//! Pawn pushes and (later) sliders can be blocked, so they take the `occupied` squares instead.
+//! Attacks for every piece: the one place move generation asks "what does this piece attack?".
+//! Knight, king and pawn attacks depend only on their square (and colour, for pawns) and come from
+//! tables built once, on first use, by their `build_*` function. Pawn pushes and sliders can be
+//! blocked, so they take the `occupied` squares; sliders delegate to `magic_bitboards`.
 
 use crate::bitboard::Bitboard;
 use crate::color::Color;
+use crate::magic_bitboards::{bishop_attacks_magic, rook_attacks_magic};
 use crate::masks::{file_mask, rank_mask};
 use std::sync::LazyLock;
 
@@ -171,11 +173,70 @@ pub fn pawn_double_pushes(color: Color, pawns: Bitboard, occupied: Bitboard) -> 
     pawn_pushes(color, single & third_rank, occupied)
 }
 
+/// Every square a rook on `sq` attacks, given `occupied` (pieces of either colour).
+/// Uses magic bitboards; this is where a PEXT version will be picked when the CPU supports it.
+pub fn rook_attacks(sq: u8, occupied: Bitboard) -> Bitboard {
+    rook_attacks_magic(sq, occupied)
+}
+
+/// Every square a bishop on `sq` attacks, given `occupied` (pieces of either colour).
+/// Uses magic bitboards; this is where a PEXT version will be picked when the CPU supports it.
+pub fn bishop_attacks(sq: u8, occupied: Bitboard) -> Bitboard {
+    bishop_attacks_magic(sq, occupied)
+}
+
+/// Every square a queen on `sq` attacks: rook attacks plus bishop attacks.
+pub fn queen_attacks(sq: u8, occupied: Bitboard) -> Bitboard {
+    rook_attacks(sq, occupied) | bishop_attacks(sq, occupied)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::color::Color;
     use crate::masks::rank_mask;
+
+    // sliders (the magic tables themselves are tested in `magic_bitboards`)
+    #[test]
+    fn slider_wrappers_match_ray_walking() {
+        use crate::attack_sliders::{bishop_attacks_ray, rook_attacks_ray};
+        let board = squares(&[30, 51, 18, 45, 9]); // g4 d7 c3 f6 b2
+        for sq in 0..64 {
+            assert_eq!(
+                rook_attacks(sq, board),
+                rook_attacks_ray(sq, board),
+                "rook {sq}"
+            );
+            assert_eq!(
+                bishop_attacks(sq, board),
+                bishop_attacks_ray(sq, board),
+                "bishop {sq}"
+            );
+        }
+    }
+    #[test]
+    fn queen_is_rook_plus_bishop() {
+        let boards = [
+            Bitboard::EMPTY,
+            Bitboard { bits: u64::MAX },
+            Bitboard {
+                bits: 0xFFFF_0000_0000_FFFF,
+            }, // start position
+            Bitboard {
+                bits: 0x55AA_55AA_55AA_55AA,
+            }, // checkerboard
+        ];
+        for board in boards {
+            for sq in 0..64 {
+                assert_eq!(
+                    queen_attacks(sq, board),
+                    rook_attacks(sq, board) | bishop_attacks(sq, board),
+                    "square {sq}, board {:#x}",
+                    board.bits
+                );
+            }
+        }
+    }
 
     /// Builds a bitboard from a list of squares.
     fn squares(list: &[u8]) -> Bitboard {
