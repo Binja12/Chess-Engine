@@ -254,6 +254,18 @@ impl Rng {
         self.state
     }
 
+    /// xorshift64*: the next xorshift number multiplied by a constant. The multiply breaks the
+    /// pure-XOR (linear) structure of plain xorshift, so no fixed set of outputs XORs to zero.
+    /// Used for Zobrist keys, where such XOR relations would cause systematic hash collisions.
+    pub fn next_rand_star(&mut self) -> u64 {
+        /// The xorshift64* output multiplier. Not derived: taken from L'Ecuyer's 1999 tables of 64-bit
+        /// multipliers with good spectral-test scores (consecutive outputs spread evenly in 2D, 3D, ...),
+        /// and used by Vigna's xorshift64* (and by Stockfish for its Zobrist keys). It is odd, so the
+        /// multiply is invertible mod 2^64 and no two inputs give the same output.
+        const XORSHIFT_STAR_MULTIPLIER: u64 = 0x2545_F491_4F6C_DD1D;
+        self.next_rand().wrapping_mul(XORSHIFT_STAR_MULTIPLIER)
+    }
+
     /// A random number with few set bits (about 8 of 64): a better magic candidate.
     pub fn next_sparse(&mut self) -> u64 {
         self.next_rand() & self.next_rand() & self.next_rand()
@@ -533,6 +545,26 @@ mod tests {
         let total: u32 = (0..1000).map(|_| rng.next_sparse().count_ones()).sum();
         let average = total as f64 / 1000.0;
         assert!((6.0..10.0).contains(&average), "average {average}");
+    }
+    #[test]
+    fn rng_star_same_seed_same_sequence() {
+        let mut a = Rng::new(SEED);
+        let mut b = Rng::new(SEED);
+        for _ in 0..100 {
+            assert_eq!(a.next_rand_star(), b.next_rand_star());
+        }
+    }
+    #[test]
+    fn rng_star_is_xorshift_times_constant() {
+        // pins the algorithm: same state steps as next_rand, output multiplied (wrapping).
+        // The literal is repeated on purpose (not XORSHIFT_STAR_MULTIPLIER): a typo in the
+        // constant would still pass if the test used the constant itself.
+        let mut plain = Rng::new(SEED);
+        let mut star = Rng::new(SEED);
+        for _ in 0..100 {
+            let expected = plain.next_rand().wrapping_mul(0x2545_F491_4F6C_DD1D);
+            assert_eq!(star.next_rand_star(), expected);
+        }
     }
 
     // magic_index

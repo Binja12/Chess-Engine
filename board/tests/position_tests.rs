@@ -7,6 +7,9 @@
 //! - **3b, writing:** parsing then writing gives back the exact same FEN (round-trip), and a
 //!   4-field FEN gets the default counters `0 1`.
 //! - **3c, errors:** each kind of bad FEN is rejected with the matching `FenError` variant.
+//! - **Zobrist hash (second subtask):** equal positions hash equal, each feature (piece, side,
+//!   castling, en passant file) changes the hash, the move counters do not, and the hash kept by
+//!   `from_fen` equals a from-scratch recomputation. Key quality is tested in `zobrist.rs`.
 //!
 //! Run only these tests with `cargo test -p board --test position_tests`.
 
@@ -316,4 +319,83 @@ fn pawn_on_back_rank_is_rejected() {
         "rnbqkbnp/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQq - 0 1",
         FenError::PawnOnBackRank,
     );
+}
+
+// ---------- Zobrist hash ----------
+
+// 14. the same position always gets the same hash
+#[test]
+fn same_fen_gives_same_hash() {
+    for fen in REFERENCE_FENS {
+        assert_eq!(parse(fen).hash(), parse(fen).hash(), "{fen}");
+    }
+}
+
+// 15. changing any single feature changes the hash
+#[test]
+fn each_feature_changes_the_hash() {
+    let pairs = [
+        // side to move
+        (
+            START_FEN,
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1",
+        ),
+        // castling rights
+        (
+            START_FEN,
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w Kkq - 0 1",
+        ),
+        // a piece on a different square (Ng1-f3)
+        (
+            START_FEN,
+            "rnbqkbnr/pppppppp/8/8/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 1",
+        ),
+        // a different kind on the same square (knight -> bishop on g1)
+        (
+            START_FEN,
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBBR w KQkq - 0 1",
+        ),
+        // a different color on the same square (pawn on e4)
+        (
+            "8/8/8/8/4P3/8/8/K6k w - - 0 1",
+            "8/8/8/8/4p3/8/8/K6k w - - 0 1",
+        ),
+        // en passant square vs none
+        (
+            "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2",
+            "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+        ),
+        // en passant on a different file
+        (
+            "rnbqkbnr/ppp2ppp/8/3pp3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 3",
+            "rnbqkbnr/ppp2ppp/8/3pp3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3",
+        ),
+    ];
+    for (a, b) in pairs {
+        assert_ne!(parse(a).hash(), parse(b).hash(), "{a} vs {b}");
+    }
+}
+
+// 16. the move counters are not part of the position's identity
+#[test]
+fn move_counters_do_not_change_the_hash() {
+    let later = parse("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 37 90");
+    assert_eq!(later.hash(), parse(START_FEN).hash());
+}
+
+// 17. the hash built up while parsing equals a from-scratch recomputation
+#[test]
+fn incremental_hash_matches_recomputed_hash() {
+    for fen in REFERENCE_FENS {
+        let pos = parse(fen);
+        assert_eq!(pos.hash(), pos.compute_hash(), "{fen}");
+    }
+}
+
+// 18. no collisions among the reference positions
+#[test]
+fn reference_positions_have_distinct_hashes() {
+    let hashes: std::collections::HashSet<u64> =
+        REFERENCE_FENS.iter().map(|fen| parse(fen).hash()).collect();
+    assert_eq!(hashes.len(), REFERENCE_FENS.len());
 }

@@ -8,6 +8,7 @@ use crate::color::Color;
 use crate::masks::{RANK_1, RANK_8};
 use crate::piece::{Piece, PieceKind};
 use crate::square::{square_from_name, square_name};
+use crate::zobrist::{black_to_move_key, castling_key, en_passant_key, piece_key};
 
 /// Castling right flag: White may still castle kingside (FEN `K`).
 pub const WHITE_KINGSIDE: u8 = 1;
@@ -40,6 +41,8 @@ pub struct Position {
     halfmove_clock: u16,
     /// Starts at 1, increases after every Black move.
     fullmove_number: u16,
+    /// Zobrist hash of everything except the move counters, kept up to date incrementally.
+    hash: u64,
 }
 
 /// Why a FEN string could not be parsed.
@@ -79,6 +82,7 @@ impl Position {
         en_passant: None,
         halfmove_clock: 0,
         fullmove_number: 1,
+        hash: 0,
     };
 
     /// Parses a FEN string. Accepts 6 fields, or 4 (counters then default to `0 1`).
@@ -87,12 +91,18 @@ impl Position {
         if fields.len() != 4 && fields.len() != 6 {
             return Err(FenError::WrongFieldCount);
         }
-
         let mut pos = Position::EMPTY;
         pos.parse_board(fields[0])?;
         pos.side_to_move = parse_side(fields[1])?;
         pos.castling = parse_castling(fields[2])?;
         pos.en_passant = parse_en_passant(fields[3], pos.side_to_move)?;
+        pos.hash ^= castling_key(pos.castling);
+        if let Some(sq) = pos.en_passant {
+            pos.hash ^= en_passant_key(sq % 8);
+        }
+        if pos.side_to_move == Color::Black {
+            pos.hash ^= black_to_move_key();
+        }
         if fields.len() == 6 {
             pos.halfmove_clock = parse_clock(fields[4])?;
             pos.fullmove_number = parse_clock(fields[5])?;
@@ -203,6 +213,30 @@ impl Position {
     pub fn fullmove_number(&self) -> u16 {
         self.fullmove_number
     }
+
+    /// The Zobrist hash: equal positions (ignoring the move counters) have equal hashes.
+    pub fn hash(&self) -> u64 {
+        self.hash
+    }
+
+    /// Recomputes the hash from scratch. Slow; used by tests and debug checks to verify that
+    /// the incrementally updated `hash()` is right.
+    pub fn compute_hash(&self) -> u64 {
+        let mut hash = 0;
+        for sq in 0..64 {
+            if let Some(piece) = self.mailbox[sq] {
+                hash ^= piece_key(piece.color, piece.kind, sq as u8);
+            }
+        }
+        hash ^= castling_key(self.castling);
+        if let Some(sq) = self.en_passant {
+            hash ^= en_passant_key(sq % 8);
+        }
+        if self.side_to_move == Color::Black {
+            hash ^= black_to_move_key();
+        }
+        hash
+    }
 }
 
 /// Lets a position be parsed with `"...".parse::<Position>()`, the same as `from_fen`.
@@ -248,6 +282,7 @@ impl Position {
         self.pieces[piece.color as usize][piece.kind as usize].set(sq);
         self.colors[piece.color as usize].set(sq);
         self.mailbox[sq as usize] = Some(piece);
+        self.hash ^= piece_key(piece.color, piece.kind, sq);
     }
 
     /// Reads the FEN board field (rank 8 first, ranks split by `/`) and places the pieces.

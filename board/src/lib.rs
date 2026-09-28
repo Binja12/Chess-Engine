@@ -7,3 +7,4 @@ pub mod masks;
 pub mod piece;
 pub mod position;
 pub mod square;
+pub mod zobrist;
