@@ -3,6 +3,9 @@
 //! Pieces are stored twice: as 12 bitboards (fast set questions: attacks, move generation)
 //! and as a 64-square mailbox (fast "what is on this square?"). Both must always agree.
 
+// the game-over rules (check, checkmate, stalemate, draws) live in position/game_over.rs
+mod game_over;
+
 use crate::attacks::{bishop_attacks, king_attacks, knight_attacks, pawn_attacks, rook_attacks};
 use crate::bitboard::Bitboard;
 use crate::castling::{CASTLES, castle, rights_kept};
