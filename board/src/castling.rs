@@ -31,27 +31,27 @@ const H8: u8 = 63;
 const ALL_RIGHTS: u8 = WHITE_KINGSIDE | WHITE_QUEENSIDE | BLACK_KINGSIDE | BLACK_QUEENSIDE;
 
 /// One way to castle for one color, with every square it looks at spelled out.
-pub struct Castle {
+pub(crate) struct Castle {
     /// The castling right it needs, e.g. `WHITE_KINGSIDE`.
-    pub right: u8,
+    pub(crate) right: u8,
     /// The squares between king and rook: all must be empty.
-    pub between: Bitboard,
+    pub(crate) between: Bitboard,
     /// Where the king starts (e1 / e8): it must not be in check.
-    pub king_from: u8,
+    pub(crate) king_from: u8,
     /// The square the king passes over: it must not be attacked. The rook lands here.
-    pub king_crosses: u8,
+    pub(crate) king_crosses: u8,
     /// Where the king lands: it must not be attacked.
-    pub king_to: u8,
+    pub(crate) king_to: u8,
     /// Where the rook starts (h1 / a1 / h8 / a8).
-    pub rook_from: u8,
+    pub(crate) rook_from: u8,
     /// `KING_CASTLE` or `QUEEN_CASTLE`.
-    pub flag: u8,
+    pub(crate) flag: u8,
 }
 
 /// `CASTLES[color as usize][side]`, side 0 = king side (short), 1 = queen side (long).
 /// On the queen side b1 / b8 must be empty (the rook crosses it) but may be attacked (the king
 /// does not). A `static`: one table in memory, handed out by reference.
-pub static CASTLES: [[Castle; 2]; 2] = [
+pub(crate) static CASTLES: [[Castle; 2]; 2] = [
     // White
     [
         Castle {
@@ -107,7 +107,7 @@ pub static CASTLES: [[Castle; 2]; 2] = [
 
 /// The castling entry for `color` and a castling move's `flag` (`KING_CASTLE` or
 /// `QUEEN_CASTLE`).
-pub fn castle(color: Color, flag: u8) -> &'static Castle {
+pub(crate) fn castle(color: Color, flag: u8) -> &'static Castle {
     let side = if flag == KING_CASTLE { 0 } else { 1 };
     &CASTLES[color as usize][side]
 }
@@ -125,7 +125,7 @@ static RIGHTS_KEPT: LazyLock<[u8; 64]> = LazyLock::new(|| {
 
 /// The castling rights that survive a move from or to `sq`: moving away from, or capturing on,
 /// a king's or rook's home square ends the rights that need that piece. One table lookup.
-pub fn rights_kept(sq: u8) -> u8 {
+pub(crate) fn rights_kept(sq: u8) -> u8 {
     RIGHTS_KEPT[sq as usize]
 }
 

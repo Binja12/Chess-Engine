@@ -190,6 +190,10 @@ pub fn queen_attacks(sq: u8, occupied: Bitboard) -> Bitboard {
     rook_attacks(sq, occupied) | bishop_attacks(sq, occupied)
 }
 
+// the end-to-end cross-test against ray walking lives in attacks/cross_tests.rs
+#[cfg(test)]
+mod cross_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

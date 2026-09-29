@@ -16,11 +16,32 @@
 
 use board::bitboard::Bitboard;
 use board::color::Color;
-use board::magic_bitboards::Rng;
 use board::movegen::{MoveGen, generate_moves};
 use board::moves::Move;
 use board::piece::PieceKind;
 use board::position::{Position, START_FEN, Undo};
+
+/// Small deterministic random generator for the random sequences (xorshift64, the same algorithm
+/// the crate uses internally, which is not public). A fixed seed gives the same sequences on
+/// every run, so a failure repeats.
+struct Rng {
+    state: u64,
+}
+
+impl Rng {
+    /// Starts a generator from `seed`, which must not be 0.
+    fn new(seed: u64) -> Rng {
+        Rng { state: seed }
+    }
+
+    /// The next pseudo-random 64-bit number.
+    fn next_rand(&mut self) -> u64 {
+        self.state ^= self.state << 13;
+        self.state ^= self.state >> 7;
+        self.state ^= self.state << 17;
+        self.state
+    }
+}
 
 /// Where the random sequences start: the start position, Kiwipete (both sides to move), perft
 /// positions 3-6, and positions made for castling, en passant and promotions.

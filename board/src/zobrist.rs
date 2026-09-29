@@ -56,22 +56,22 @@ fn generate_keys() -> ZobristKeys {
 }
 
 /// The key for a piece of this color and kind standing on `sq`.
-pub fn piece_key(color: Color, kind: PieceKind, sq: u8) -> u64 {
+pub(crate) fn piece_key(color: Color, kind: PieceKind, sq: u8) -> u64 {
     KEYS.pieces[color as usize][kind as usize][sq as usize]
 }
 
 /// The key for a set of castling rights (an OR of the castling flags, 0..=15).
-pub fn castling_key(rights: u8) -> u64 {
+pub(crate) fn castling_key(rights: u8) -> u64 {
     KEYS.castling[rights as usize]
 }
 
 /// The key for an en passant square on `file` (0 = a … 7 = h).
-pub fn en_passant_key(file: u8) -> u64 {
+pub(crate) fn en_passant_key(file: u8) -> u64 {
     KEYS.en_passant[file as usize]
 }
 
 /// The key XORed in when Black is to move.
-pub fn black_to_move_key() -> u64 {
+pub(crate) fn black_to_move_key() -> u64 {
     KEYS.black_to_move
 }
 

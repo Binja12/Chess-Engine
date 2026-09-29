@@ -1,9 +1,13 @@
 //! # Sliding attacks: end-to-end cross-test (CE-6 "done when")
 //!
-//! **What is tested.** The public `board::attacks::{rook_attacks, bishop_attacks, queen_attacks}`
-//! (the functions move generation calls) must return exactly what the ray-walking reference
-//! `board::attack_sliders::*_attacks_ray` returns, for every square of 10,000 random boards.
-//! This file sees only the crate's public API, like any caller outside `board`.
+//! **What is tested.** The public `attacks::{rook_attacks, bishop_attacks, queen_attacks}` (the
+//! functions move generation calls) must return exactly what the ray-walking reference
+//! `attack_sliders::*_attacks_ray` returns, for every square of 10,000 random boards.
+//!
+//! **Why this is a unit test.** The ray-walking reference and the random generator are
+//! crate-only (not part of the public API), so only code inside the crate can use them. This
+//! file is a test-only child module of `attacks` (`#[cfg(test)] mod cross_tests;`), but it
+//! calls only the public attack functions, exactly as a caller outside the crate would.
 //!
 //! **Why ray walking is the reference.** It is slow but simple, and it is trusted because of
 //! its own unit tests in `attack_sliders.rs`: hand-computed examples (blockers, corners, edge
@@ -28,12 +32,12 @@
 //! The message names the piece, board number, square and occupancy (hex); copy the square and
 //! occupancy into a unit test as a regression test before fixing the bug.
 //!
-//! Run only these tests with `cargo test -p board --test attack_tests`.
+//! Run only these tests with `cargo test -p board cross_tests`.
 
-use board::attack_sliders::{bishop_attacks_ray, queen_attacks_ray, rook_attacks_ray};
-use board::attacks::{bishop_attacks, queen_attacks, rook_attacks};
-use board::bitboard::Bitboard;
-use board::magic_bitboards::Rng;
+use crate::attack_sliders::{bishop_attacks_ray, queen_attacks_ray, rook_attacks_ray};
+use crate::attacks::{bishop_attacks, queen_attacks, rook_attacks};
+use crate::bitboard::Bitboard;
+use crate::magic_bitboards::Rng;
 
 /// How many random boards the cross-test checks (the number in the CE-6 "done when").
 /// 10,000 boards x 64 squares x 3 pieces = about 1.9 million comparisons, ~0.3 s in a debug build.
