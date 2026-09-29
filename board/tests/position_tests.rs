@@ -21,7 +21,8 @@ use board::position::{
     BLACK_KINGSIDE, BLACK_QUEENSIDE, FenError, Position, START_FEN, WHITE_KINGSIDE, WHITE_QUEENSIDE,
 };
 
-/// Start position, Kiwipete, perft positions 3-6, and a position with an en passant square.
+/// Start position, Kiwipete, perft positions 3-6, and a position with an en passant square
+/// (1. e4 d5 2. e5 f5: the e5 pawn can take on f6).
 const REFERENCE_FENS: [&str; 7] = [
     START_FEN,
     "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
@@ -29,7 +30,7 @@ const REFERENCE_FENS: [&str; 7] = [
     "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
     "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
     "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
-    "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2",
+    "rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3",
 ];
 
 const COLORS: [Color; 2] = [Color::White, Color::Black];
@@ -83,12 +84,17 @@ fn start_position_has_expected_pieces_and_state() {
 // 1b. the other fields are read, not just defaulted
 #[test]
 fn state_fields_are_read_from_the_fen() {
-    let pos = parse("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R b Kq e3 7 42");
+    // White just played e2-e4 and the d4 pawn can take on e3
+    let pos = parse("r3k2r/8/8/8/3pP3/8/8/R3K2R b Kq e3 0 42");
     assert_eq!(pos.side_to_move(), Color::Black);
     assert_eq!(pos.castling(), WHITE_KINGSIDE | BLACK_QUEENSIDE);
     assert_eq!(pos.en_passant(), Some(20)); // e3
-    assert_eq!(pos.halfmove_clock(), 7);
     assert_eq!(pos.fullmove_number(), 42);
+    // a halfmove clock that is not the default 0 (a double push resets it, so no en passant here)
+    assert_eq!(
+        parse("r3k2r/8/8/8/8/8/8/R3K2R b Kq - 7 42").halfmove_clock(),
+        7
+    );
 }
 
 // 2. bitboards, color sets and mailbox all agree
@@ -310,6 +316,25 @@ fn bad_en_passant_is_rejected() {
     );
 }
 
+// 10b. an en passant square no enemy pawn can capture onto is dropped, so the position is the
+//      same as without it (same FEN, same hash): the rule make_move uses too
+#[test]
+fn en_passant_square_without_a_capturer_is_dropped() {
+    // after 1. e4 e5 no white pawn stands beside e5, so e6 is useless
+    let pos = parse("rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2");
+    let without = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2";
+    assert_eq!(pos.en_passant(), None);
+    assert_eq!(pos.to_fen(), without);
+    assert_eq!(pos.hash(), parse(without).hash());
+    // Black just played a7-a5; the h4 pawn reaches a6 only by wrapping around the board edge
+    // (h4 = 31, 31 + 9 = 40 = a6), so it cannot take on a6
+    assert_eq!(parse("4k3/8/8/p7/7P/8/8/4K3 w - a6 0 1").en_passant(), None);
+
+    // with a pawn that can take (e5 takes on f6), the square is kept
+    let pos = parse("rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3");
+    assert_eq!(pos.en_passant(), Some(sq("f6")));
+}
+
 // 11. move counters
 #[test]
 fn bad_clock_is_rejected() {
@@ -394,15 +419,15 @@ fn each_feature_changes_the_hash() {
             "8/8/8/8/4P3/8/8/K6k w - - 0 1",
             "8/8/8/8/4p3/8/8/K6k w - - 0 1",
         ),
-        // en passant square vs none
+        // en passant square vs none (the e5 pawn can take on f6)
         (
-            "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2",
-            "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+            "rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3",
+            "rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq - 0 3",
         ),
-        // en passant on a different file
+        // en passant on a different file (the e5 pawn can take on d6 or f6)
         (
-            "rnbqkbnr/ppp2ppp/8/3pp3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 3",
-            "rnbqkbnr/ppp2ppp/8/3pp3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3",
+            "4k3/8/8/3pPp2/8/8/8/4K3 w - d6 0 1",
+            "4k3/8/8/3pPp2/8/8/8/4K3 w - f6 0 1",
         ),
     ];
     for (a, b) in pairs {

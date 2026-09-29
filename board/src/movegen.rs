@@ -12,15 +12,16 @@ use crate::attacks::{
     rook_attacks,
 };
 use crate::bitboard::Bitboard;
+use crate::castling::CASTLES;
 use crate::color::Color;
 use crate::masks::{FILE_A, FILE_H, RANK_1, RANK_8};
 use crate::moves::{
-    BISHOP_PROMOTION, BISHOP_PROMOTION_CAPTURE, CAPTURE, DOUBLE_PAWN_PUSH, EN_PASSANT, KING_CASTLE,
-    KNIGHT_PROMOTION, KNIGHT_PROMOTION_CAPTURE, Move, MoveList, QUEEN_CASTLE, QUEEN_PROMOTION,
+    BISHOP_PROMOTION, BISHOP_PROMOTION_CAPTURE, CAPTURE, DOUBLE_PAWN_PUSH, EN_PASSANT,
+    KNIGHT_PROMOTION, KNIGHT_PROMOTION_CAPTURE, Move, MoveList, QUEEN_PROMOTION,
     QUEEN_PROMOTION_CAPTURE, QUIET, ROOK_PROMOTION, ROOK_PROMOTION_CAPTURE,
 };
 use crate::piece::PieceKind;
-use crate::position::{BLACK_KINGSIDE, BLACK_QUEENSIDE, Position, WHITE_KINGSIDE, WHITE_QUEENSIDE};
+use crate::position::Position;
 
 /// Every square of the board.
 const ALL_SQUARES: Bitboard = Bitboard { bits: u64::MAX };
@@ -44,7 +45,7 @@ const ALL_SQUARES: Bitboard = Bitboard { bits: u64::MAX };
 /// |---|---|---|
 /// | move onto an empty square, pawn push | [`QUIET`] | quiet |
 /// | pawn double push | [`DOUBLE_PAWN_PUSH`] | quiet |
-/// | castling, short / long | [`KING_CASTLE`] / [`QUEEN_CASTLE`] | quiet |
+/// | castling, short / long | [`KING_CASTLE`](crate::moves::KING_CASTLE) / [`QUEEN_CASTLE`](crate::moves::QUEEN_CASTLE) | quiet |
 /// | capture | [`CAPTURE`] | noisy |
 /// | en passant | [`EN_PASSANT`] | noisy |
 /// | promotion, with or without a capture (4 moves: knight, bishop, rook, queen) | `*_PROMOTION`, `*_PROMOTION_CAPTURE` | noisy |
@@ -550,99 +551,3 @@ fn add_promotions(to_squares: Bitboard, step: i8, flags: [u8; 4], list: &mut Mov
         }
     }
 }
-
-// ---------- castling data ----------
-
-// the squares castling looks at (a1 = 0 … h8 = 63)
-const A1: u8 = 0;
-const B1: u8 = 1;
-const C1: u8 = 2;
-const D1: u8 = 3;
-const E1: u8 = 4;
-const F1: u8 = 5;
-const G1: u8 = 6;
-const H1: u8 = 7;
-const A8: u8 = 56;
-const B8: u8 = 57;
-const C8: u8 = 58;
-const D8: u8 = 59;
-const E8: u8 = 60;
-const F8: u8 = 61;
-const G8: u8 = 62;
-const H8: u8 = 63;
-
-/// One way to castle for one color, with every square it looks at spelled out.
-struct Castle {
-    /// The castling right it needs, e.g. `WHITE_KINGSIDE`.
-    right: u8,
-    /// The squares between king and rook: all must be empty.
-    between: Bitboard,
-    /// Where the king starts (e1 / e8): it must not be in check.
-    king_from: u8,
-    /// The square the king passes over: it must not be attacked.
-    king_crosses: u8,
-    /// Where the king lands: it must not be attacked.
-    king_to: u8,
-    /// Where the rook starts (h1 / a1 / h8 / a8). Read by the debug check for now; `make_move`
-    /// will use it to move the rook.
-    rook_from: u8,
-    /// `KING_CASTLE` or `QUEEN_CASTLE`.
-    flag: u8,
-}
-
-/// `CASTLES[color as usize][side]`, side 0 = king side (short), 1 = queen side (long).
-/// On the queen side b1 / b8 must be empty (the rook crosses it) but may be attacked (the king
-/// does not).
-const CASTLES: [[Castle; 2]; 2] = [
-    // White
-    [
-        Castle {
-            right: WHITE_KINGSIDE,
-            // `1 << sq` is the bit of one square; `|` joins them into a set
-            between: Bitboard {
-                bits: 1 << F1 | 1 << G1,
-            },
-            king_from: E1,
-            king_crosses: F1,
-            king_to: G1,
-            rook_from: H1,
-            flag: KING_CASTLE,
-        },
-        Castle {
-            right: WHITE_QUEENSIDE,
-            between: Bitboard {
-                bits: 1 << B1 | 1 << C1 | 1 << D1,
-            },
-            king_from: E1,
-            king_crosses: D1,
-            king_to: C1,
-            rook_from: A1,
-            flag: QUEEN_CASTLE,
-        },
-    ],
-    // Black
-    [
-        Castle {
-            right: BLACK_KINGSIDE,
-            between: Bitboard {
-                bits: 1 << F8 | 1 << G8,
-            },
-            king_from: E8,
-            king_crosses: F8,
-            king_to: G8,
-            rook_from: H8,
-            flag: KING_CASTLE,
-        },
-        Castle {
-            right: BLACK_QUEENSIDE,
-            between: Bitboard {
-                bits: 1 << B8 | 1 << C8 | 1 << D8,
-            },
-            king_from: E8,
-            king_crosses: D8,
-            king_to: C8,
-            rook_from: A8,
-            flag: QUEEN_CASTLE,
-        },
-    ],
-];

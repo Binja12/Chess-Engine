@@ -5,8 +5,10 @@
 
 use crate::attacks::{bishop_attacks, king_attacks, knight_attacks, pawn_attacks, rook_attacks};
 use crate::bitboard::Bitboard;
+use crate::castling::{CASTLES, castle, rights_kept};
 use crate::color::Color;
 use crate::masks::{RANK_1, RANK_8};
+use crate::moves::{DOUBLE_PAWN_PUSH, EN_PASSANT, KING_CASTLE, Move, QUEEN_CASTLE};
 use crate::piece::{Piece, PieceKind};
 use crate::square::{square_from_name, square_name};
 use crate::zobrist::{black_to_move_key, castling_key, en_passant_key, piece_key};
@@ -36,13 +38,31 @@ pub struct Position {
     side_to_move: Color,
     /// Castling rights, an OR of the `WHITE_*` / `BLACK_*` flags.
     castling: u8,
-    /// The square a pawn skipped with a double push on the last move, if any.
+    /// The square a pawn skipped with a double push on the last move, kept only when an enemy
+    /// pawn could capture onto it (otherwise the position is the same as without it).
     en_passant: Option<u8>,
     /// Half-moves since the last capture or pawn move (50-move rule).
     halfmove_clock: u16,
     /// Starts at 1, increases after every Black move.
     fullmove_number: u16,
     /// Zobrist hash of everything except the move counters, kept up to date incrementally.
+    hash: u64,
+}
+
+/// What `make_move` destroys and `unmake_move` needs back: `make_move` returns it, the caller
+/// keeps it (in search: a local variable of that depth) and hands it to `unmake_move`. It is not
+/// `Clone`, so passing it to `unmake_move` moves it and each record can be used only once.
+#[derive(Debug)]
+pub struct Undo {
+    /// The piece the move captured; for en passant, the pawn beside the to square.
+    captured: Option<Piece>,
+    /// Castling rights before the move.
+    castling: u8,
+    /// En passant square before the move.
+    en_passant: Option<u8>,
+    /// Halfmove clock before the move.
+    halfmove_clock: u16,
+    /// Hash before the move.
     hash: u64,
 }
 
@@ -89,6 +109,8 @@ impl Position {
     };
 
     /// Parses a FEN string. Accepts 6 fields, or 4 (counters then default to `0 1`).
+    /// An en passant square that no pawn of the side to move could capture onto is dropped, the
+    /// same rule `make_move` follows, so the same position always gets the same hash.
     pub fn from_fen(fen: &str) -> Result<Position, FenError> {
         let fields: Vec<&str> = fen.split_whitespace().collect();
         if fields.len() != 4 && fields.len() != 6 {
@@ -99,6 +121,10 @@ impl Position {
         pos.side_to_move = parse_side(fields[1])?;
         pos.castling = parse_castling(fields[2])?;
         pos.en_passant = parse_en_passant(fields[3], pos.side_to_move)?;
+        if let Some(ep) = pos.en_passant {
+            // the pawn that skipped `ep` belongs to the side that just moved
+            pos.en_passant = pos.usable_en_passant(ep, opponent(pos.side_to_move));
+        }
         pos.hash ^= castling_key(pos.castling);
         if let Some(sq) = pos.en_passant {
             pos.hash ^= en_passant_key(sq % 8);
@@ -261,17 +287,113 @@ impl Position {
         if (knight_attacks(sq) & (self.pieces(by, PieceKind::Knight))) != Bitboard::EMPTY {
             return true;
         }
-        let opponent = match by {
-            Color::White => Color::Black,
-            Color::Black => Color::White,
-        };
-        if (pawn_attacks(opponent, sq) & self.pieces(by, PieceKind::Pawn)) != Bitboard::EMPTY {
+        if (pawn_attacks(opponent(by), sq) & self.pieces(by, PieceKind::Pawn)) != Bitboard::EMPTY {
             return true;
         }
         if (king_attacks(sq) & self.pieces(by, PieceKind::King)) != Bitboard::EMPTY {
             return true;
         }
         false
+    }
+
+    /// Plays `mv`, a move `generate_moves` produced for this position, and returns what is
+    /// needed to take it back. Moves the pieces (the rook too when castling, the captured pawn
+    /// beside the to square for en passant, the new piece for a promotion) and updates the side
+    /// to move, castling rights, en passant square (set only when an enemy pawn could capture
+    /// onto it), move counters and hash. The move is trusted: whether it leaves the mover's king
+    /// in check is not tested here.
+    pub fn make_move(&mut self, mv: Move) -> Undo {
+        let (from, to, flag) = (mv.from(), mv.to(), mv.flag());
+        let us = self.side_to_move;
+        let moved = self
+            .piece_at(from)
+            .expect("make_move: no piece on the from square");
+        // everything below can change these, so keep them for unmake first
+        let mut undo = Undo {
+            captured: None,
+            castling: self.castling,
+            en_passant: self.en_passant,
+            halfmove_clock: self.halfmove_clock,
+            hash: self.hash,
+        };
+
+        // pieces: the captured one leaves, the moving one goes from `from` to `to`
+        if mv.is_capture() {
+            undo.captured = Some(self.remove_piece(captured_square(mv, us)));
+        }
+        self.remove_piece(from);
+        let arriving = match mv.promotion() {
+            Some(kind) => Piece { color: us, kind },
+            None => moved,
+        };
+        self.put_piece(arriving, to);
+        if flag == KING_CASTLE || flag == QUEEN_CASTLE {
+            // the rook jumps over the king onto the square the king crossed
+            let castle = castle(us, flag);
+            self.move_piece(castle.rook_from, castle.king_crosses);
+        }
+
+        // state: castling rights, en passant square, counters, turn
+        if self.castling != 0 {
+            self.set_castling(self.castling & rights_kept(from) & rights_kept(to));
+        }
+        let en_passant = if flag == DOUBLE_PAWN_PUSH {
+            // the skipped square is halfway between from and to
+            self.usable_en_passant((from + to) / 2, us)
+        } else {
+            None
+        };
+        self.set_en_passant(en_passant);
+        self.halfmove_clock = if moved.kind == PieceKind::Pawn || mv.is_capture() {
+            0
+        } else {
+            self.halfmove_clock + 1
+        };
+        if us == Color::Black {
+            self.fullmove_number += 1;
+        }
+        self.side_to_move = opponent(us);
+        self.hash ^= black_to_move_key();
+        undo
+    }
+
+    /// Takes back `mv`, which must be the last move made, with the `undo` that `make_move`
+    /// returned for it. Afterwards the position is exactly as before `make_move`, hash included.
+    pub fn unmake_move(&mut self, mv: Move, undo: Undo) {
+        let (from, to, flag) = (mv.from(), mv.to(), mv.flag());
+        // the side that made the move is to move again
+        let us = opponent(self.side_to_move);
+        self.side_to_move = us;
+        if us == Color::Black {
+            self.fullmove_number -= 1;
+        }
+
+        // pieces, in reverse: rook back, moved piece back (a promoted piece becomes a pawn
+        // again), then the captured piece returns
+        if flag == KING_CASTLE || flag == QUEEN_CASTLE {
+            let castle = castle(us, flag);
+            self.move_piece(castle.king_crosses, castle.rook_from);
+        }
+        let arrived = self.remove_piece(to);
+        let moved = if mv.promotion().is_some() {
+            Piece {
+                color: us,
+                kind: PieceKind::Pawn,
+            }
+        } else {
+            arrived
+        };
+        self.put_piece(moved, from);
+        if let Some(captured) = undo.captured {
+            self.put_piece(captured, captured_square(mv, us));
+        }
+
+        // state: straight from the record (the piece helpers updated the hash on the way, but
+        // copying the old one back is simpler than undoing each change)
+        self.castling = undo.castling;
+        self.en_passant = undo.en_passant;
+        self.halfmove_clock = undo.halfmove_clock;
+        self.hash = undo.hash;
     }
 }
 
@@ -323,6 +445,47 @@ impl Position {
         self.colors[piece.color as usize].set(sq);
         self.mailbox[sq as usize] = Some(piece);
         self.hash ^= piece_key(piece.color, piece.kind, sq);
+    }
+
+    /// Takes the piece off `sq` (there must be one) and returns it; the opposite of `put_piece`.
+    fn remove_piece(&mut self, sq: u8) -> Piece {
+        let piece = self.mailbox[sq as usize].expect("remove_piece: the square is empty");
+        self.pieces[piece.color as usize][piece.kind as usize].clear(sq);
+        self.colors[piece.color as usize].clear(sq);
+        self.mailbox[sq as usize] = None;
+        self.hash ^= piece_key(piece.color, piece.kind, sq);
+        piece
+    }
+
+    /// Moves the piece on `from` to the empty square `to`.
+    fn move_piece(&mut self, from: u8, to: u8) {
+        let piece = self.remove_piece(from);
+        self.put_piece(piece, to);
+    }
+
+    /// Replaces the castling rights, keeping the hash in sync.
+    fn set_castling(&mut self, rights: u8) {
+        self.hash ^= castling_key(self.castling) ^ castling_key(rights);
+        self.castling = rights;
+    }
+
+    /// Replaces the en passant square, keeping the hash in sync.
+    fn set_en_passant(&mut self, square: Option<u8>) {
+        if let Some(old) = self.en_passant {
+            self.hash ^= en_passant_key(old % 8);
+        }
+        if let Some(new) = square {
+            self.hash ^= en_passant_key(new % 8);
+        }
+        self.en_passant = square;
+    }
+
+    /// `Some(ep)` if a pawn of the other side could capture onto `ep`, the square a `pusher`
+    /// pawn just skipped; `None` otherwise. Looks outwards from `ep`, like `is_attacked`: a
+    /// `pusher` pawn standing on `ep` would attack exactly the squares the capturers stand on.
+    fn usable_en_passant(&self, ep: u8, pusher: Color) -> Option<u8> {
+        let capturers = pawn_attacks(pusher, ep) & self.pieces(opponent(pusher), PieceKind::Pawn);
+        if capturers.is_empty() { None } else { Some(ep) }
     }
 
     /// Reads the FEN board field (rank 8 first, ranks split by `/`) and places the pieces.
@@ -383,18 +546,17 @@ impl Position {
     /// on a right means "king and rook are home and never moved": `make_move` keeps that true
     /// by clearing rights as they move, so move generation can trust the flags.
     fn check_castling_rights(&self) -> Result<(), FenError> {
-        // (right, color, king's home square, rook's home square)
-        let homes = [
-            (WHITE_KINGSIDE, Color::White, 4, 7),    // e1, h1
-            (WHITE_QUEENSIDE, Color::White, 4, 0),   // e1, a1
-            (BLACK_KINGSIDE, Color::Black, 60, 63),  // e8, h8
-            (BLACK_QUEENSIDE, Color::Black, 60, 56), // e8, a8
-        ];
-        for (right, color, king, rook) in homes {
-            let pieces_home = self.pieces(color, PieceKind::King).contains(king)
-                && self.pieces(color, PieceKind::Rook).contains(rook);
-            if self.castling & right != 0 && !pieces_home {
-                return Err(FenError::CastlingWithoutPieces);
+        for color in [Color::White, Color::Black] {
+            for castle in &CASTLES[color as usize] {
+                let pieces_home = self
+                    .pieces(color, PieceKind::King)
+                    .contains(castle.king_from)
+                    && self
+                        .pieces(color, PieceKind::Rook)
+                        .contains(castle.rook_from);
+                if self.castling & castle.right != 0 && !pieces_home {
+                    return Err(FenError::CastlingWithoutPieces);
+                }
             }
         }
         Ok(())
@@ -452,4 +614,22 @@ fn parse_en_passant(text: &str, side: Color) -> Result<Option<u8>, FenError> {
 /// Reads a move counter (halfmove clock or fullmove number).
 fn parse_clock(text: &str) -> Result<u16, FenError> {
     text.parse::<u16>().map_err(|_| FenError::BadClock)
+}
+
+/// The other side: Black for White, White for Black.
+fn opponent(color: Color) -> Color {
+    match color {
+        Color::White => Color::Black,
+        Color::Black => Color::White,
+    }
+}
+
+/// The square of the piece `mv` captures: its to square, except for en passant, where the
+/// captured pawn stands one rank behind it (d5 when a white pawn takes on d6).
+fn captured_square(mv: Move, us: Color) -> u8 {
+    if mv.flag() == EN_PASSANT {
+        (mv.to() as i8 - 8 * us.forward()) as u8
+    } else {
+        mv.to()
+    }
 }
