@@ -12,19 +12,19 @@ use std::sync::LazyLock;
 /// Which sliding piece a mask or magic belongs to. The queen has none: it is rook | bishop.
 #[derive(Clone, Copy, Debug, PartialEq)]
 
-pub enum Slider {
+pub(crate) enum Slider {
     Rook,
     Bishop,
 }
 
 /// Slots in the rook attack table: the sum of 2^(mask bits) over all 64 squares.
-pub const ROOK_TABLE_SIZE: usize = 102_400;
+pub(crate) const ROOK_TABLE_SIZE: usize = 102_400;
 /// Slots in the bishop attack table: the sum of 2^(mask bits) over all 64 squares.
-pub const BISHOP_TABLE_SIZE: usize = 5_248;
+pub(crate) const BISHOP_TABLE_SIZE: usize = 5_248;
 
 /// Rook magic for every square, found by `find_magic` from seed `0x9E37_79B9_7F4A_7C15`.
 /// Regenerate with the ignored `generate_magics` test; `stored_magics_are_valid` re-checks them.
-pub const ROOK_MAGICS: [u64; 64] = [
+pub(crate) const ROOK_MAGICS: [u64; 64] = [
     0x9080001184204004,
     0x00c01008a0004000,
     0x0500081100c12000,
@@ -91,7 +91,7 @@ pub const ROOK_MAGICS: [u64; 64] = [
     0xc0000510e4440082,
 ];
 /// Bishop magic for every square, found the same way (the search continues after the rook magics).
-pub const BISHOP_MAGICS: [u64; 64] = [
+pub(crate) const BISHOP_MAGICS: [u64; 64] = [
     0x0088a00c04420420,
     0x0002840902021000,
     0x0008008102002000,
@@ -161,7 +161,7 @@ pub const BISHOP_MAGICS: [u64; 64] = [
 /// The squares whose occupancy can change a rook's attacks from `sq`:
 /// its rays, without `sq` and without the last square of each ray.
 /// The file part ends on ranks 1 and 8, the rank part on files a and h, so each part drops only its own ends.
-pub fn rook_mask(sq: u8) -> Bitboard {
+pub(crate) fn rook_mask(sq: u8) -> Bitboard {
     let file_part = file_mask(sq % 8) & !(RANK_1 | RANK_8);
     let rank_part = rank_mask(sq / 8) & !(FILE_A | FILE_H);
     let mut mask = file_part | rank_part;
@@ -171,14 +171,14 @@ pub fn rook_mask(sq: u8) -> Bitboard {
 
 /// The squares whose occupancy can change a bishop's attacks from `sq`:
 /// its diagonals, without `sq` and without the last square of each ray.
-pub fn bishop_mask(sq: u8) -> Bitboard {
+pub(crate) fn bishop_mask(sq: u8) -> Bitboard {
     bishop_attacks_ray(sq, Bitboard::EMPTY) & INNER_MASK
 }
 
 /// Every blocker pattern inside `mask`: all 2^n subsets, including the empty one and `mask` itself.
 /// Doubling: start with only the empty set; for each mask square, copy every subset found so far
 /// with that square added. After n squares there are 2^n subsets.
-pub fn subsets(mask: Bitboard) -> Vec<Bitboard> {
+pub(crate) fn subsets(mask: Bitboard) -> Vec<Bitboard> {
     let mut result = Vec::with_capacity(1 << mask.count());
     result.push(Bitboard::EMPTY);
     for sq in mask {
@@ -195,14 +195,16 @@ pub fn subsets(mask: Bitboard) -> Vec<Bitboard> {
 
 /// Squeezes a blocker `pattern` into a table index in `0..2^bits` using `magic`.
 /// Uses wrapping multiplication: the overflow is part of the trick.
-pub fn magic_index(pattern: Bitboard, magic: u64, bits: u32) -> usize {
+pub(crate) fn magic_index(pattern: Bitboard, magic: u64, bits: u32) -> usize {
     (pattern.bits.wrapping_mul(magic) >> (64 - bits)) as usize
 }
 
 /// `true` if no two blocker patterns of `slider` on `sq` share an index while having different attacks.
 /// Fills a scratch table (`None` = empty slot) with every pattern's attacks; a slot that already
 /// holds a different answer means the candidate is rejected.
-pub fn is_magic(slider: Slider, sq: u8, magic: u64) -> bool {
+/// Test only: used by the magic search and by the test that re-checks the stored magics.
+#[cfg(test)]
+pub(crate) fn is_magic(slider: Slider, sq: u8, magic: u64) -> bool {
     let mask = match slider {
         Slider::Rook => rook_mask(sq),
         Slider::Bishop => bishop_mask(sq),
@@ -225,7 +227,10 @@ pub fn is_magic(slider: Slider, sq: u8, magic: u64) -> bool {
 }
 
 /// Guesses candidates from `rng` until one passes `is_magic`, and returns it.
-pub fn find_magic(slider: Slider, sq: u8, rng: &mut Rng) -> u64 {
+/// Test only: the magics are stored as constants and regenerated with the ignored
+/// `generate_magics` test.
+#[cfg(test)]
+pub(crate) fn find_magic(slider: Slider, sq: u8, rng: &mut Rng) -> u64 {
     loop {
         let magic = rng.next_sparse();
         if is_magic(slider, sq, magic) {
@@ -236,26 +241,40 @@ pub fn find_magic(slider: Slider, sq: u8, rng: &mut Rng) -> u64 {
 
 /// Small deterministic pseudo-random generator: the same seed always gives the same sequence,
 /// so the same magics are found on every run.
-pub struct Rng {
+pub(crate) struct Rng {
     state: u64,
 }
 
 impl Rng {
     /// Starts a generator from `seed`, which must not be 0.
-    pub fn new(seed: u64) -> Rng {
+    pub(crate) fn new(seed: u64) -> Rng {
         Rng { state: seed }
     }
 
     /// The next pseudo-random 64-bit number.
-    pub fn next_rand(&mut self) -> u64 {
+    pub(crate) fn next_rand(&mut self) -> u64 {
         self.state ^= self.state << 13;
         self.state ^= self.state >> 7;
         self.state ^= self.state << 17;
         self.state
     }
 
+    /// xorshift64*: the next xorshift number multiplied by a constant. The multiply breaks the
+    /// pure-XOR (linear) structure of plain xorshift, so no fixed set of outputs XORs to zero.
+    /// Used for Zobrist keys, where such XOR relations would cause systematic hash collisions.
+    pub(crate) fn next_rand_star(&mut self) -> u64 {
+        /// The xorshift64* output multiplier. Not derived: taken from L'Ecuyer's 1999 tables of 64-bit
+        /// multipliers with good spectral-test scores (consecutive outputs spread evenly in 2D, 3D, ...),
+        /// and used by Vigna's xorshift64* (and by Stockfish for its Zobrist keys). It is odd, so the
+        /// multiply is invertible mod 2^64 and no two inputs give the same output.
+        const XORSHIFT_STAR_MULTIPLIER: u64 = 0x2545_F491_4F6C_DD1D;
+        self.next_rand().wrapping_mul(XORSHIFT_STAR_MULTIPLIER)
+    }
+
     /// A random number with few set bits (about 8 of 64): a better magic candidate.
-    pub fn next_sparse(&mut self) -> u64 {
+    /// Test only, like `find_magic`.
+    #[cfg(test)]
+    pub(crate) fn next_sparse(&mut self) -> u64 {
         self.next_rand() & self.next_rand() & self.next_rand()
     }
 }
@@ -263,23 +282,23 @@ impl Rng {
 /// Everything one square needs for a magic lookup: which squares matter, the multiplier,
 /// how many index bits, and where this square's slots start in the shared `attacks` vector.
 #[derive(Clone, Copy, Debug)]
-pub struct MagicEntry {
-    pub mask: Bitboard,
-    pub magic: u64,
-    pub bits: u32,
-    pub offset: usize,
+pub(crate) struct MagicEntry {
+    pub(crate) mask: Bitboard,
+    pub(crate) magic: u64,
+    pub(crate) bits: u32,
+    pub(crate) offset: usize,
 }
 
 /// All magic attack tables for one slider, in one flat vector (layout A): square `sq` owns the
 /// slots `offset .. offset + 2^bits` of `attacks`, one per blocker pattern.
-pub struct MagicTable {
+pub(crate) struct MagicTable {
     entries: [MagicEntry; 64],
     attacks: Vec<Bitboard>,
 }
 
 impl MagicTable {
     /// The attacks of this slider on `sq` given `occupied`: mask, multiply, shift, one read.
-    pub fn lookup(&self, sq: u8, occupied: Bitboard) -> Bitboard {
+    pub(crate) fn lookup(&self, sq: u8, occupied: Bitboard) -> Bitboard {
         let entry = self.entries[sq as usize];
         let index = magic_index(occupied & entry.mask, entry.magic, entry.bits);
         self.attacks[entry.offset + index]
@@ -339,13 +358,13 @@ static BISHOP_TABLE: LazyLock<MagicTable> = LazyLock::new(|| build_table(Slider:
 
 /// Rook attacks from `sq` given `occupied`, by magic lookup in `ROOK_TABLE`.
 /// Move generation calls `attacks::rook_attacks`, which picks this (or PEXT, later).
-pub fn rook_attacks_magic(sq: u8, occupied: Bitboard) -> Bitboard {
+pub(crate) fn rook_attacks_magic(sq: u8, occupied: Bitboard) -> Bitboard {
     ROOK_TABLE.lookup(sq, occupied)
 }
 
 /// Bishop attacks from `sq` given `occupied`, by magic lookup in `BISHOP_TABLE`.
 /// Move generation calls `attacks::bishop_attacks`, which picks this (or PEXT, later).
-pub fn bishop_attacks_magic(sq: u8, occupied: Bitboard) -> Bitboard {
+pub(crate) fn bishop_attacks_magic(sq: u8, occupied: Bitboard) -> Bitboard {
     BISHOP_TABLE.lookup(sq, occupied)
 }
 
@@ -533,6 +552,26 @@ mod tests {
         let total: u32 = (0..1000).map(|_| rng.next_sparse().count_ones()).sum();
         let average = total as f64 / 1000.0;
         assert!((6.0..10.0).contains(&average), "average {average}");
+    }
+    #[test]
+    fn rng_star_same_seed_same_sequence() {
+        let mut a = Rng::new(SEED);
+        let mut b = Rng::new(SEED);
+        for _ in 0..100 {
+            assert_eq!(a.next_rand_star(), b.next_rand_star());
+        }
+    }
+    #[test]
+    fn rng_star_is_xorshift_times_constant() {
+        // pins the algorithm: same state steps as next_rand, output multiplied (wrapping).
+        // The literal is repeated on purpose (not XORSHIFT_STAR_MULTIPLIER): a typo in the
+        // constant would still pass if the test used the constant itself.
+        let mut plain = Rng::new(SEED);
+        let mut star = Rng::new(SEED);
+        for _ in 0..100 {
+            let expected = plain.next_rand().wrapping_mul(0x2545_F491_4F6C_DD1D);
+            assert_eq!(star.next_rand_star(), expected);
+        }
     }
 
     // magic_index

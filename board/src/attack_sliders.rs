@@ -7,7 +7,7 @@ use crate::bitboard::Bitboard;
 /// Every square a rook on `sq` attacks, given `occupied` (pieces of either colour).
 /// The first blocker on each ray is included; `sq` itself being in `occupied` is ignored.
 /// Each loop adds the square first, then stops if it was occupied.
-pub fn rook_attacks_ray(sq: u8, occupied: Bitboard) -> Bitboard {
+pub(crate) fn rook_attacks_ray(sq: u8, occupied: Bitboard) -> Bitboard {
     let mut bb = Bitboard::EMPTY;
     let rank = sq as i8 / 8;
     //left: `tmp >= 0` first, because -1 / 8 == 0 would pass the rank check on rank 1
@@ -53,7 +53,7 @@ pub fn rook_attacks_ray(sq: u8, occupied: Bitboard) -> Bitboard {
 /// The first blocker on each ray is included; `sq` itself being in `occupied` is ignored.
 /// Every diagonal step must move exactly one rank; a step that wrapped around the a/h edge
 /// lands on the wrong rank, so checking the expected `rank` stops the ray at the edge.
-pub fn bishop_attacks_ray(sq: u8, occupied: Bitboard) -> Bitboard {
+pub(crate) fn bishop_attacks_ray(sq: u8, occupied: Bitboard) -> Bitboard {
     let mut bb = Bitboard::EMPTY;
     let mut rank = sq as i8 / 8 - 1;
     //left down
@@ -103,7 +103,9 @@ pub fn bishop_attacks_ray(sq: u8, occupied: Bitboard) -> Bitboard {
 }
 
 /// Every square a queen on `sq` attacks: rook attacks plus bishop attacks.
-pub fn queen_attacks_ray(sq: u8, occupied: Bitboard) -> Bitboard {
+/// Test only: the reference for `queen_attacks` in the attack cross-test.
+#[cfg(test)]
+pub(crate) fn queen_attacks_ray(sq: u8, occupied: Bitboard) -> Bitboard {
     bishop_attacks_ray(sq, occupied) | rook_attacks_ray(sq, occupied)
 }
 

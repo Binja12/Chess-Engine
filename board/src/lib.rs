@@ -1,6 +1,13 @@
-pub mod attack_sliders;
+mod attack_sliders;
 pub mod attacks;
 pub mod bitboard;
+mod castling;
 pub mod color;
-pub mod magic_bitboards;
+mod magic_bitboards;
 pub mod masks;
+pub mod movegen;
+pub mod moves;
+pub mod piece;
+pub mod position;
+pub mod square;
+mod zobrist;
