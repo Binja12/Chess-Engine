@@ -4,6 +4,7 @@ pub mod bitboard;
 pub mod color;
 pub mod magic_bitboards;
 pub mod masks;
+pub mod movegen;
 pub mod moves;
 pub mod piece;
 pub mod position;

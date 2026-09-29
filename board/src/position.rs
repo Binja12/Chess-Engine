@@ -3,6 +3,7 @@
 //! Pieces are stored twice: as 12 bitboards (fast set questions: attacks, move generation)
 //! and as a 64-square mailbox (fast "what is on this square?"). Both must always agree.
 
+use crate::attacks::{bishop_attacks, king_attacks, knight_attacks, pawn_attacks, rook_attacks};
 use crate::bitboard::Bitboard;
 use crate::color::Color;
 use crate::masks::{RANK_1, RANK_8};
@@ -68,6 +69,8 @@ pub enum FenError {
     BadKingCount,
     /// A pawn stands on rank 1 or rank 8.
     PawnOnBackRank,
+    /// A castling right whose king or rook is not on its home square.
+    CastlingWithoutPieces,
 }
 
 impl Position {
@@ -108,6 +111,7 @@ impl Position {
             pos.fullmove_number = parse_clock(fields[5])?;
         }
         pos.check_kings_and_pawns()?;
+        pos.check_castling_rights()?;
         Ok(pos)
     }
 
@@ -237,6 +241,38 @@ impl Position {
         }
         hash
     }
+
+    /// True if any piece of color `by` attacks `sq`. Looks outwards from `sq`: a knight on `sq`
+    /// would hit `by`'s knights, a bishop on `sq` would hit `by`'s bishops and queens, and so on.
+    pub fn is_attacked(&self, sq: u8, by: Color) -> bool {
+        let occ = self.occupied();
+        if (bishop_attacks(sq, occ)
+            & (self.pieces(by, PieceKind::Bishop) | self.pieces(by, PieceKind::Queen)))
+            != Bitboard::EMPTY
+        {
+            return true;
+        }
+        if (rook_attacks(sq, occ)
+            & (self.pieces(by, PieceKind::Rook) | self.pieces(by, PieceKind::Queen)))
+            != Bitboard::EMPTY
+        {
+            return true;
+        }
+        if (knight_attacks(sq) & (self.pieces(by, PieceKind::Knight))) != Bitboard::EMPTY {
+            return true;
+        }
+        let opponent = match by {
+            Color::White => Color::Black,
+            Color::Black => Color::White,
+        };
+        if (pawn_attacks(opponent, sq) & self.pieces(by, PieceKind::Pawn)) != Bitboard::EMPTY {
+            return true;
+        }
+        if (king_attacks(sq) & self.pieces(by, PieceKind::King)) != Bitboard::EMPTY {
+            return true;
+        }
+        false
+    }
 }
 
 /// Lets a position be parsed with `"...".parse::<Position>()`, the same as `from_fen`.
@@ -267,6 +303,10 @@ impl std::fmt::Display for FenError {
             FenError::BadClock => write!(f, "FEN move counters must be non-negative numbers"),
             FenError::BadKingCount => write!(f, "each side must have exactly one king"),
             FenError::PawnOnBackRank => write!(f, "pawns cannot stand on rank 1 or 8"),
+            FenError::CastlingWithoutPieces => write!(
+                f,
+                "a castling right needs its king and rook on their home squares"
+            ),
         }
     }
 }
@@ -335,6 +375,27 @@ impl Position {
             self.pieces(Color::White, PieceKind::Pawn) | self.pieces(Color::Black, PieceKind::Pawn);
         if !(pawns & (RANK_1 | RANK_8)).is_empty() {
             return Err(FenError::PawnOnBackRank);
+        }
+        Ok(())
+    }
+
+    /// Rejects castling rights whose king and rook are not on their home squares. From here
+    /// on a right means "king and rook are home and never moved": `make_move` keeps that true
+    /// by clearing rights as they move, so move generation can trust the flags.
+    fn check_castling_rights(&self) -> Result<(), FenError> {
+        // (right, color, king's home square, rook's home square)
+        let homes = [
+            (WHITE_KINGSIDE, Color::White, 4, 7),    // e1, h1
+            (WHITE_QUEENSIDE, Color::White, 4, 0),   // e1, a1
+            (BLACK_KINGSIDE, Color::Black, 60, 63),  // e8, h8
+            (BLACK_QUEENSIDE, Color::Black, 60, 56), // e8, a8
+        ];
+        for (right, color, king, rook) in homes {
+            let pieces_home = self.pieces(color, PieceKind::King).contains(king)
+                && self.pieces(color, PieceKind::Rook).contains(rook);
+            if self.castling & right != 0 && !pieces_home {
+                return Err(FenError::CastlingWithoutPieces);
+            }
         }
         Ok(())
     }

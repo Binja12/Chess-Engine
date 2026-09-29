@@ -83,7 +83,7 @@ fn start_position_has_expected_pieces_and_state() {
 // 1b. the other fields are read, not just defaulted
 #[test]
 fn state_fields_are_read_from_the_fen() {
-    let pos = parse("rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R b Kq e3 7 42");
+    let pos = parse("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R b Kq e3 7 42");
     assert_eq!(pos.side_to_move(), Color::Black);
     assert_eq!(pos.castling(), WHITE_KINGSIDE | BLACK_QUEENSIDE);
     assert_eq!(pos.en_passant(), Some(20)); // e3
@@ -251,6 +251,40 @@ fn bad_castling_is_rejected() {
     }
 }
 
+// 9b. a castling right needs its king and that rook on their home squares; after that the
+//     move generator trusts the right (make_move keeps it true by clearing rights as pieces move)
+#[test]
+fn castling_right_without_its_king_and_rook_is_rejected() {
+    // no rooks at all
+    assert_rejected(
+        "4k3/8/8/8/8/8/8/4K3 w KQ - 0 1",
+        FenError::CastlingWithoutPieces,
+    );
+    assert_rejected(
+        "4k3/8/8/8/8/8/8/4K3 w kq - 0 1",
+        FenError::CastlingWithoutPieces,
+    );
+    // king not on e1 (it is on f1)
+    assert_rejected(
+        "r3k2r/8/8/8/8/8/8/R4K1R w K - 0 1",
+        FenError::CastlingWithoutPieces,
+    );
+    // king not on e8 (it is on d8)
+    assert_rejected(
+        "r2k3r/8/8/8/8/8/8/R3K2R w q - 0 1",
+        FenError::CastlingWithoutPieces,
+    );
+    // a rook of the other color on the corner does not count
+    assert_rejected(
+        "r3k2r/8/8/8/8/8/8/r3K2R w Q - 0 1",
+        FenError::CastlingWithoutPieces,
+    );
+
+    // each right is checked on its own: Q with the a1 rook is fine although h1 is empty
+    let pos = parse("r3k2r/8/8/8/8/8/8/R3K3 w Q - 0 1");
+    assert_eq!(pos.castling(), WHITE_QUEENSIDE);
+}
+
 // 10. en passant field
 #[test]
 fn bad_en_passant_is_rejected() {
@@ -398,4 +432,86 @@ fn reference_positions_have_distinct_hashes() {
     let hashes: std::collections::HashSet<u64> =
         REFERENCE_FENS.iter().map(|fen| parse(fen).hash()).collect();
     assert_eq!(hashes.len(), REFERENCE_FENS.len());
+}
+
+// ---------- is_attacked ----------
+
+/// Square index from its name, e.g. `sq("e4")`.
+fn sq(name: &str) -> u8 {
+    board::square::square_from_name(name).expect("valid square name")
+}
+
+// 19. pawns attack diagonally forward, in their own direction
+#[test]
+fn pawns_attack_diagonally_forward() {
+    let black = parse("4k3/8/8/8/3p4/8/8/4K3 w - - 0 1");
+    assert!(black.is_attacked(sq("c3"), Color::Black));
+    assert!(black.is_attacked(sq("e3"), Color::Black));
+    assert!(
+        !black.is_attacked(sq("d3"), Color::Black),
+        "not straight ahead"
+    );
+    assert!(!black.is_attacked(sq("c5"), Color::Black), "not backwards");
+
+    let white = parse("4k3/8/8/8/3P4/8/8/4K3 w - - 0 1");
+    assert!(white.is_attacked(sq("c5"), Color::White));
+    assert!(white.is_attacked(sq("e5"), Color::White));
+    assert!(!white.is_attacked(sq("c3"), Color::White), "not backwards");
+}
+
+// 20. knight and king
+#[test]
+fn knights_and_kings_attack() {
+    let pos = parse("4k3/8/8/8/3N4/8/8/4K3 w - - 0 1");
+    assert!(pos.is_attacked(sq("b3"), Color::White), "knight");
+    assert!(pos.is_attacked(sq("f5"), Color::White), "knight");
+    assert!(!pos.is_attacked(sq("d5"), Color::White));
+    assert!(pos.is_attacked(sq("d2"), Color::White), "king");
+    assert!(pos.is_attacked(sq("f1"), Color::White), "king");
+    assert!(!pos.is_attacked(sq("e3"), Color::White));
+}
+
+// 21. sliders: bishop diagonals, rook lines, queen both
+#[test]
+fn sliders_attack_along_their_lines() {
+    let bishop = parse("4k3/8/8/8/3B4/8/8/4K3 w - - 0 1");
+    for name in ["a1", "h8", "g1", "a7"] {
+        assert!(bishop.is_attacked(sq(name), Color::White), "bishop {name}");
+    }
+    assert!(!bishop.is_attacked(sq("d5"), Color::White));
+
+    let rook = parse("4k3/8/8/8/3R4/8/8/4K3 w - - 0 1");
+    for name in ["d8", "a4", "h4"] {
+        assert!(rook.is_attacked(sq(name), Color::White), "rook {name}");
+    }
+    assert!(!rook.is_attacked(sq("e5"), Color::White));
+
+    let queen = parse("4k3/8/8/8/3Q4/8/8/4K3 w - - 0 1");
+    assert!(queen.is_attacked(sq("a1"), Color::White), "queen diagonal");
+    assert!(queen.is_attacked(sq("d8"), Color::White), "queen file");
+    assert!(
+        !queen.is_attacked(sq("c6"), Color::White),
+        "a knight jump away"
+    );
+}
+
+// 22. a piece in between blocks a slider (the blocker itself is still attacked)
+#[test]
+fn blocked_sliders_do_not_attack_past_the_blocker() {
+    let bishop = parse("4k3/8/8/8/3B4/2P5/8/4K3 w - - 0 1");
+    assert!(bishop.is_attacked(sq("c3"), Color::White), "the blocker");
+    assert!(!bishop.is_attacked(sq("b2"), Color::White));
+    assert!(!bishop.is_attacked(sq("a1"), Color::White));
+
+    let rook = parse("4k3/8/3p4/8/3R4/8/8/4K3 w - - 0 1");
+    assert!(rook.is_attacked(sq("d6"), Color::White), "the blocker");
+    assert!(!rook.is_attacked(sq("d7"), Color::White));
+}
+
+// 23. only pieces of the asked color count
+#[test]
+fn only_the_given_color_attacks() {
+    let pos = parse("4k3/8/8/8/3R4/8/8/4K3 w - - 0 1");
+    assert!(pos.is_attacked(sq("a4"), Color::White));
+    assert!(!pos.is_attacked(sq("a4"), Color::Black));
 }

@@ -51,7 +51,7 @@ const PROMOTION_BIT: u8 = 0b1000;
 const SQUARE_MASK: u16 = 0x3F;
 
 /// One move: from square, to square and a flag, packed into a `u16`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Move {
     bits: u16,
 }
