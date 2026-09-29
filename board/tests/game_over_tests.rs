@@ -1,7 +1,7 @@
-//! # Game-over rules (CE-257, first subtask CE-258: check, checkmate, stalemate)
+//! # Game-over rules (CE-257: subtasks CE-258 check, checkmate, stalemate; CE-261 material)
 //!
-//! **What is tested.** `Position::in_check`, `is_checkmate` and `is_stalemate` through the public
-//! API:
+//! **What is tested.** `Position::in_check`, `is_checkmate`, `is_stalemate` and
+//! `is_insufficient_material` through the public API:
 //! - every piece kind can give check, to either side, and two checkers at once are check too;
 //! - no check when nothing attacks the king: pawns attack only diagonally forward, and a piece
 //!   of either color blocks a line;
@@ -12,11 +12,16 @@
 //! - a check with a way out (the king steps away, the checker is captured, a piece blocks) is
 //!   neither;
 //! - a mate reached by playing moves, not only one parsed from a FEN;
-//! - ordinary positions are not over, and the queries leave the position exactly as it was.
+//! - ordinary positions are not over, and the queries leave the position exactly as it was;
+//! - insufficient material: K v K, K+N v K, K+B v K, and bishops only, all on one square color
+//!   (promoted ones too), with either side to move; everything else can still mate, even when
+//!   it cannot be forced (K+N+N v K, K+N v K+N, bishops on opposite colors); and capturing the
+//!   last pawn turns a position into a draw.
 //!
-//! Every position was also checked with the `chess` crate (game status, number of checking
-//! pieces, legal moves) before this file was written, so a failure points at the
-//! implementation, not at the test.
+//! Every check, mate and stalemate position was also checked with the `chess` crate (game
+//! status, number of checking pieces, legal moves) before this file was written, so a failure
+//! points at the implementation, not at the test. The `chess` crate has no insufficient material
+//! rule; those cases follow FIDE's dead-position rule (no sequence of legal moves can mate).
 //!
 //! Run only these tests with `cargo test -p board --test game_over_tests`.
 
@@ -56,6 +61,11 @@ fn find_move(pos: &mut Position, text: &str) -> Move {
 fn play(pos: &mut Position, text: &str) {
     let mv = find_move(pos, text);
     pos.make_move(mv);
+}
+
+/// `fen` as written (White to move) and the same position with Black to move.
+fn both_sides_to_move(fen: &str) -> [String; 2] {
+    [fen.to_string(), fen.replace(" w ", " b ")]
 }
 
 // 1. every piece kind can give check, to either side; two checkers at once are check too
@@ -237,4 +247,77 @@ fn the_queries_leave_the_position_unchanged() {
         pos.is_stalemate();
         assert_eq!(pos, before, "{fen}");
     }
+}
+
+// ---------- insufficient material (CE-261) ----------
+
+// 10. no pawn, rook or queen, and either at most one knight or bishop, or only bishops all on
+//     one square color: nobody can mate any more. Whose turn it is does not matter.
+#[test]
+fn insufficient_material() {
+    let cases = [
+        ("K v K", "8/8/8/4k3/8/8/8/4K3 w - - 0 1"),
+        ("K+N v K", "8/8/8/4k3/8/8/8/4KN2 w - - 0 1"),
+        ("K v K+N", "8/8/8/4k3/8/2n5/8/4K3 w - - 0 1"),
+        ("K+B v K", "8/8/8/4k3/8/8/8/2B1K3 w - - 0 1"),
+        (
+            "K+B v K+B, both bishops on dark squares (c1, f8)",
+            "5b2/8/8/4k3/8/8/8/2B1K3 w - - 0 1",
+        ),
+        (
+            "K+B v K+B, both bishops on light squares (f1, c8)",
+            "2b5/8/8/4k3/8/8/8/4KB2 w - - 0 1",
+        ),
+        (
+            "three bishops on dark squares (c1, e3, g5), so two were promoted",
+            "8/8/8/4k1B1/8/4B3/8/2B1K3 w - - 0 1",
+        ),
+    ];
+    for (why, fen) in cases {
+        for fen in both_sides_to_move(fen) {
+            assert!(parse(&fen).is_insufficient_material(), "{why}: {fen}");
+        }
+    }
+}
+
+// 11. everything else can still end in mate, even when it cannot be forced: a pawn can promote,
+//     and the losing side's own piece can block its king's last free square (K+N+N v K,
+//     K+N v K+N, K+B v K+N, bishops on opposite colors)
+#[test]
+fn sufficient_material() {
+    let cases = [
+        ("start position", START_FEN),
+        (
+            "K+P v K: the pawn can promote",
+            "8/8/8/4k3/8/8/4P3/4K3 w - - 0 1",
+        ),
+        ("K+R v K", "8/8/8/4k3/8/8/8/R3K3 w - - 0 1"),
+        ("K+Q v K", "8/8/8/4k3/8/8/8/3QK3 w - - 0 1"),
+        ("K+N+N v K", "8/8/8/4k3/8/8/8/1N2K1N1 w - - 0 1"),
+        ("K+N v K+N", "8/8/8/4k3/8/2n5/8/4KN2 w - - 0 1"),
+        ("K+B v K+N", "8/8/8/4k3/8/2n5/8/2B1K3 w - - 0 1"),
+        (
+            "K+B v K+B on opposite colors (c1 dark, c8 light)",
+            "2b5/8/8/4k3/8/8/8/2B1K3 w - - 0 1",
+        ),
+        (
+            "K+B+B v K, bishops on opposite colors (c1, f1)",
+            "8/8/8/4k3/8/8/8/2B1KB2 w - - 0 1",
+        ),
+        ("K+B+N v K", "8/8/8/4k3/8/8/8/1N2KB2 w - - 0 1"),
+    ];
+    for (why, fen) in cases {
+        for fen in both_sides_to_move(fen) {
+            assert!(!parse(&fen).is_insufficient_material(), "{why}: {fen}");
+        }
+    }
+}
+
+// 12. the answer follows the board: the knight takes the last pawn, leaving K+N v K
+#[test]
+fn capturing_the_last_pawn_leaves_insufficient_material() {
+    let mut pos = parse("8/8/4k3/8/4p3/8/5N2/4K3 w - - 0 1");
+    assert!(!pos.is_insufficient_material());
+    play(&mut pos, "f2e4");
+    assert!(pos.is_insufficient_material(), "{}", pos.to_fen());
 }
