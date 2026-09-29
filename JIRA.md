@@ -89,9 +89,9 @@ Done when: tests on hand-picked positions and move sequences detect checkmate, s
 
 **CE-9 Engine trait and random engine** (1)
 Done when: `Engine` trait exists; a random-move engine implements it; a test plays it against itself to game end without panicking.
-- `Engine` trait: `set_position(start, moves: &[Move])`, `best_move(limits)`, `evaluate`, `top_moves(n)`, `stop`; `moves` is empty (`&[]`) for a bare FEN, e.g. a puzzle
-- `SearchLimits` (depth, nodes, time)
-- Random engine + self-play test
+- `Engine` trait: `set_limits(limits)`, `get_moves(pos, n, limits)`, `get_eval(pos)`; the engine keeps no game, the caller passes the position (its history shows repetitions); stopping a running search is decided in CE-10
+- `SearchLimits` (depth, nodes, time); the default, used by every engine when nobody gives limits, is 1 second per move
+- Random engine (its own crate, `engine-random`) + self-play test
 
 **CE-10 UCI binary** (3)
 Done when: Cute Chess GUI can load the binary and play a full game; `uci`, `isready`, `ucinewgame`, `position`, `go` (depth/movetime/wtime/btime), `stop`, `quit` handled; `stop` interrupts a running search.
