@@ -66,6 +66,9 @@ dependencies = [
 [[package]]
 name = "engine-api"
 version = "0.1.0"
+dependencies = [
+ "board",
+]
 
 [[package]]
 name = "failure"
