@@ -35,7 +35,8 @@ chess-engine/
 ├── Cargo.toml                 workspace
 ├── crates/
 │   ├── board/                 own bitboards: Position, Move, attack tables (magic bitboards), legal move gen, make/unmake, FEN, Zobrist hash, perft, game-over rules (mate, stalemate, 50-move, threefold, insufficient material)
-│   ├── engine-api/            trait Engine { set_position(start, moves: &[Move]), best_move(limits), evaluate, top_moves(n), stop }
+│   ├── engine-api/            trait Engine { set_limits(limits), get_moves(pos, n, limits), get_eval(pos) }: the caller holds the position; stopping a running search is decided in CE-10
+│   ├── engine-random/         random legal moves: the first engine, proves the pipeline (UCI, Lichess), plays the self-play test
 │   ├── engine-ab/             Engine A: alpha-beta search + hand-written evaluation + A* mate finder
 │   ├── engine-nn/             Engine B: neural-net evaluation (Rust inference), reuses engine-ab search
 │   ├── uci/                   binary: wraps any Engine in the UCI protocol (stdin/stdout)
