@@ -66,7 +66,7 @@ Done when: FEN round-trips; make followed by unmake restores the position and ha
 - Make/unmake with undo record
 - Round-trip test
 
-**Bug CE-? FEN handling like Stockfish** — *not in Jira yet; branch `bug-align-fen-with-stockfish`, renamed `CE-<n>-align-fen-with-stockfish` once logged; merged before CE-8*
+**Bug CE-256 FEN handling like Stockfish** — *branch `CE-256-align-fen-with-stockfish`, merged before CE-8*
 Done when: `from_fen` accepts and cleans up the same positions as Stockfish's `Position::set`, and every FEN that used to crash or corrupt the position has a regression test. `from_fen` rejects more than 8 pawns, more pieces than promotions explain, a king the side to move could capture, and counters out of range; it drops castling rights without their king and rook, and en passant squares without a legal en passant capture (`make_move` follows the same en passant rule after a double push, so the same position always has the same hash and repetitions count correctly). Before the fix, such FENs panicked (en passant with no pawn, a captured king, a 256-move list overflow, counter overflow) or silently corrupted the position (en passant onto an occupied square).
 
 **CE-8 Legality and perft gate** (5)
@@ -76,11 +76,11 @@ Done when: perft matches on all reference positions (start, Kiwipete, positions 
 - Reference position tests
 - Oracle comparison test
 
-**CE-? Game-over rules** (3) — *new, not in Jira yet*
+**CE-257 Game-over rules** (3)
 Done when: tests on hand-picked positions and move sequences detect checkmate, stalemate, the 50-move rule, threefold repetition and insufficient material, all as queries on `Position`.
 - `in_check`, checkmate and stalemate (built on CE-8's legal moves)
 - 50-move rule (from `halfmove_clock`)
-- Hash history in `Position` and threefold repetition (the en passant rule it relies on is done in the FEN bug fix: a position whose only en passant captures are illegal has the same hash as without the square): the start position counts as the first occurrence, then every position reached by a move; anything before the start position is unknown and never counted
+- Hash history in `Position` and threefold repetition (the en passant rule it relies on is done in the FEN bug fix CE-256: a position whose only en passant captures are illegal has the same hash as without the square): the start position counts as the first occurrence, then every position reached by a move; anything before the start position is unknown and never counted
 - Insufficient material
 
 ---
