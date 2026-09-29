@@ -3,6 +3,9 @@
 //! Pieces are stored twice: as 12 bitboards (fast set questions: attacks, move generation)
 //! and as a 64-square mailbox (fast "what is on this square?"). Both must always agree.
 
+// the game-over rules (check, checkmate, stalemate, draws) live in position/game_over.rs
+mod game_over;
+
 use crate::attacks::{bishop_attacks, king_attacks, knight_attacks, pawn_attacks, rook_attacks};
 use crate::bitboard::Bitboard;
 use crate::castling::{CASTLES, castle, rights_kept};
@@ -48,6 +51,9 @@ pub struct Position {
     fullmove_number: u16,
     /// Zobrist hash of everything except the move counters, kept up to date incrementally.
     hash: u64,
+    /// The hashes of the positions before this one, oldest first: the position `from_fen` read,
+    /// then one per move played since. `make_move` pushes, `unmake_move` pops. For repetitions.
+    history: Vec<u64>,
 }
 
 /// What `make_move` destroys and `unmake_move` needs back: `make_move` returns it, the caller
@@ -115,6 +121,7 @@ impl Position {
         halfmove_clock: 0,
         fullmove_number: 1,
         hash: 0,
+        history: Vec::new(),
     };
 
     /// Parses a FEN string. Accepts 6 fields, or 4 (counters then default to `0 1`).
@@ -324,8 +331,9 @@ impl Position {
     /// needed to take it back. Moves the pieces (the rook too when castling, the captured pawn
     /// beside the to square for en passant, the new piece for a promotion) and updates the side
     /// to move, castling rights, en passant square (set only when an en passant capture onto it
-    /// is legal, the same rule as `from_fen`), move counters and hash. The move is trusted:
-    /// whether it leaves the mover's king in check is not tested here.
+    /// is legal, the same rule as `from_fen`), move counters and hash; the position before the
+    /// move joins the history. The move is trusted: whether it leaves the mover's king in check
+    /// is not tested here.
     pub fn make_move(&mut self, mv: Move) -> Undo {
         let (from, to, flag) = (mv.from(), mv.to(), mv.flag());
         let us = self.side_to_move;
@@ -340,6 +348,7 @@ impl Position {
             halfmove_clock: self.halfmove_clock,
             hash: self.hash,
         };
+        self.history.push(self.hash);
 
         // pieces: the captured one leaves, the moving one goes from `from` to `to`
         if mv.is_capture() {
@@ -382,7 +391,8 @@ impl Position {
     }
 
     /// Takes back `mv`, which must be the last move made, with the `undo` that `make_move`
-    /// returned for it. Afterwards the position is exactly as before `make_move`, hash included.
+    /// returned for it. Afterwards the position is exactly as before `make_move`, hash and
+    /// history included.
     pub fn unmake_move(&mut self, mv: Move, undo: Undo) {
         let (from, to, flag) = (mv.from(), mv.to(), mv.flag());
         // the side that made the move is to move again
@@ -418,6 +428,13 @@ impl Position {
         self.en_passant = undo.en_passant;
         self.halfmove_clock = undo.halfmove_clock;
         self.hash = undo.hash;
+        // the position before the move is on the board again, so it leaves the history
+        let previous = self.history.pop();
+        debug_assert_eq!(
+            previous,
+            Some(undo.hash),
+            "unmake_move: the history does not match the undo record"
+        );
     }
 
     /// True if `mv`, a move `generate_moves` produced for this position, does not leave the
