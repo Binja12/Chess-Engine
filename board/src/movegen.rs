@@ -254,9 +254,10 @@ impl MoveGen {
 ///
 /// Panics if more than [`MAX_MOVES`](crate::moves::MAX_MOVES) (256) moves match `config`. That
 /// does not happen in real games: the most legal moves any known position has is 218, and that
-/// position has exactly 218 pseudo-legal moves too. But [`Position::from_fen`] does not limit
-/// the number of pieces, so an invented FEN with many extra queens can go over (27 queens can
-/// reach 279 moves).
+/// position has exactly 218 pseudo-legal moves too. [`Position::from_fen`] only accepts
+/// material a real game can have (Stockfish's check; its move lists have the same 256 limit),
+/// so no FEN can go over either. Before that check, invented FENs with many extra queens did
+/// (27 queens can reach 279 moves).
 ///
 /// Debug builds also panic when a castling right is set but its king or rook is not on its home
 /// square. `from_fen` never allows that, so it would mean a bug in code that changed the
@@ -388,7 +389,7 @@ fn piece_moves(pos: &Position, kind: PieceKind, config: MoveGen, list: &mut Move
 /// is not in check, does not pass over an attacked square and does not land on one.
 /// Castling is quiet.
 ///
-/// A right is trusted to mean "king and rook are home and never moved": `from_fen` rejects
+/// A right is trusted to mean "king and rook are home and never moved": `from_fen` drops
 /// rights without their pieces, and `make_move` clears a right when its king or rook moves or
 /// the rook is captured on its corner.
 /// Debug builds check this before every castling move they add.

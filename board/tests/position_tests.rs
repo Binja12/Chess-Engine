@@ -10,12 +10,18 @@
 //! - **Zobrist hash (second subtask):** equal positions hash equal, each feature (piece, side,
 //!   castling, en passant file) changes the hash, the move counters do not, and the hash kept by
 //!   `from_fen` equals a from-scratch recomputation. Key quality is tested in `zobrist.rs`.
+//! - **FEN checks like Stockfish (CE-8, bug fix):** `from_fen` accepts and cleans up the same
+//!   positions as Stockfish's `Position::set`: impossible material, a king the side to move could
+//!   capture and out-of-range counters are rejected; castling rights without their pieces and en
+//!   passant squares without a legal capture are dropped. Before the fix, some of these FENs made
+//!   `generate_moves` or `make_move` panic or corrupt the position.
 //!
 //! Run only these tests with `cargo test -p board --test position_tests`.
 
 use board::bitboard::Bitboard;
 use board::color::Color;
 use board::masks::rank_mask;
+use board::movegen::{MoveGen, generate_moves};
 use board::piece::{Piece, PieceKind};
 use board::position::{
     BLACK_KINGSIDE, BLACK_QUEENSIDE, FenError, Position, START_FEN, WHITE_KINGSIDE, WHITE_QUEENSIDE,
@@ -257,37 +263,48 @@ fn bad_castling_is_rejected() {
     }
 }
 
-// 9b. a castling right needs its king and that rook on their home squares; after that the
-//     move generator trusts the right (make_move keeps it true by clearing rights as pieces move)
+// 9b. a castling right needs its king and that rook on their home squares; without them it is
+//     dropped, as Stockfish does, so the position is the same as without it (same FEN, same
+//     hash). After that the move generator trusts the right (make_move keeps it true by
+//     clearing rights as pieces move)
 #[test]
-fn castling_right_without_its_king_and_rook_is_rejected() {
-    // no rooks at all
-    assert_rejected(
-        "4k3/8/8/8/8/8/8/4K3 w KQ - 0 1",
-        FenError::CastlingWithoutPieces,
-    );
-    assert_rejected(
-        "4k3/8/8/8/8/8/8/4K3 w kq - 0 1",
-        FenError::CastlingWithoutPieces,
-    );
-    // king not on e1 (it is on f1)
-    assert_rejected(
-        "r3k2r/8/8/8/8/8/8/R4K1R w K - 0 1",
-        FenError::CastlingWithoutPieces,
-    );
-    // king not on e8 (it is on d8)
-    assert_rejected(
-        "r2k3r/8/8/8/8/8/8/R3K2R w q - 0 1",
-        FenError::CastlingWithoutPieces,
-    );
-    // a rook of the other color on the corner does not count
-    assert_rejected(
-        "r3k2r/8/8/8/8/8/8/r3K2R w Q - 0 1",
-        FenError::CastlingWithoutPieces,
-    );
+fn castling_right_without_its_king_and_rook_is_dropped() {
+    let cases = [
+        // no rooks at all
+        (
+            "4k3/8/8/8/8/8/8/4K3 w KQ - 0 1",
+            "4k3/8/8/8/8/8/8/4K3 w - - 0 1",
+        ),
+        (
+            "4k3/8/8/8/8/8/8/4K3 w kq - 0 1",
+            "4k3/8/8/8/8/8/8/4K3 w - - 0 1",
+        ),
+        // king not on e1 (it is on f1). Stockfish would read this as a Chess960 right (king f1,
+        // rook h1); we only play standard chess, so it is dropped
+        (
+            "r3k2r/8/8/8/8/8/8/R4K1R w K - 0 1",
+            "r3k2r/8/8/8/8/8/8/R4K1R w - - 0 1",
+        ),
+        // king not on e8 (it is on d8), the same Chess960 case for Black
+        (
+            "r2k3r/8/8/8/8/8/8/R3K2R w q - 0 1",
+            "r2k3r/8/8/8/8/8/8/R3K2R w - - 0 1",
+        ),
+        // a rook of the other color on the corner does not count
+        (
+            "r3k2r/8/8/8/8/8/8/r3K2R w Q - 0 1",
+            "r3k2r/8/8/8/8/8/8/r3K2R w - - 0 1",
+        ),
+    ];
+    for (fen, without) in cases {
+        let pos = parse(fen);
+        assert_eq!(pos.castling(), 0, "{fen}");
+        assert_eq!(pos.to_fen(), without);
+        assert_eq!(pos.hash(), parse(without).hash(), "{fen}");
+    }
 
-    // each right is checked on its own: Q with the a1 rook is fine although h1 is empty
-    let pos = parse("r3k2r/8/8/8/8/8/8/R3K3 w Q - 0 1");
+    // each right is checked on its own: K goes (h1 is empty), Q with the a1 rook stays
+    let pos = parse("r3k2r/8/8/8/8/8/8/R3K3 w KQ - 0 1");
     assert_eq!(pos.castling(), WHITE_QUEENSIDE);
 }
 
@@ -409,10 +426,11 @@ fn each_feature_changes_the_hash() {
             START_FEN,
             "rnbqkbnr/pppppppp/8/8/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 1",
         ),
-        // a different kind on the same square (knight -> bishop on g1)
+        // a different kind on the same square (knight -> bishop on g1; not in the start
+        // position, where a 3rd bishop beside 8 pawns is material no game can reach)
         (
-            START_FEN,
-            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBBR w KQkq - 0 1",
+            "4k3/8/8/8/8/8/8/4K1N1 w - - 0 1",
+            "4k3/8/8/8/8/8/8/4K1B1 w - - 0 1",
         ),
         // a different color on the same square (pawn on e4)
         (
@@ -539,4 +557,216 @@ fn only_the_given_color_attacks() {
     let pos = parse("4k3/8/8/8/3R4/8/8/4K3 w - - 0 1");
     assert!(pos.is_attacked(sq("a4"), Color::White));
     assert!(!pos.is_attacked(sq("a4"), Color::Black));
+}
+
+// ---------- FEN checks like Stockfish (CE-8 bug fix) ----------
+
+/// Plays every pseudo-legal move of `pos` and takes it back: none may panic, and every unmake
+/// must give back exactly `pos`. The bad en passant FENs below used to fail this.
+fn assert_every_move_unmakes(pos: &Position) {
+    let mut copy = pos.clone();
+    for &mv in generate_moves(pos, MoveGen::ALL).as_slice() {
+        let undo = copy.make_move(mv);
+        copy.unmake_move(mv, undo);
+        assert_eq!(&copy, pos, "{mv} in {}", pos.to_fen());
+    }
+}
+
+/// Parses each `(fen, without)` pair and checks the en passant square was dropped: `fen` gives
+/// the same FEN text and hash as `without`, and every move plays and unmakes cleanly.
+fn assert_en_passant_dropped(cases: &[(&str, &str)]) {
+    for &(fen, without) in cases {
+        let pos = parse(fen);
+        assert_eq!(pos.en_passant(), None, "{fen}");
+        assert_eq!(pos.to_fen(), without);
+        assert_eq!(pos.hash(), parse(without).hash(), "{fen}");
+        assert_every_move_unmakes(&pos);
+    }
+}
+
+// 24. an en passant square is kept only if the enemy pawn that just moved two squares stands in
+//     front of it. Before the fix it was kept, and the en passant move panicked (no pawn to
+//     capture) or captured our own pawn
+#[test]
+fn en_passant_square_without_the_pawn_that_moved_is_dropped() {
+    assert_en_passant_dropped(&[
+        // no pawn on e5 at all
+        (
+            "4k3/8/8/3P4/8/8/8/4K3 w - e6 0 1",
+            "4k3/8/8/3P4/8/8/8/4K3 w - - 0 1",
+        ),
+        // the pawn on e5 is White's own
+        (
+            "4k3/8/8/3PP3/8/8/8/4K3 w - e6 0 1",
+            "4k3/8/8/3PP3/8/8/8/4K3 w - - 0 1",
+        ),
+        // Black to move: no white pawn on e4
+        (
+            "4k3/8/8/8/3p4/8/8/4K3 b - e3 0 1",
+            "4k3/8/8/8/3p4/8/8/4K3 b - - 0 1",
+        ),
+    ]);
+}
+
+// 25. ... and only if the square the pawn skipped and the square it started from are both
+//     empty. Before the fix the capture landed on top of the e6 knight, and after unmake the
+//     knight was gone
+#[test]
+fn en_passant_square_with_a_piece_in_the_way_is_dropped() {
+    assert_en_passant_dropped(&[
+        // a knight on e6, the square the pawn skipped
+        (
+            "4k3/8/4N3/3Pp3/8/8/8/4K3 w - e6 0 1",
+            "4k3/8/4N3/3Pp3/8/8/8/4K3 w - - 0 1",
+        ),
+        // a knight on e7, the square the pawn started from
+        (
+            "4k3/4n3/8/3Pp3/8/8/8/4K3 w - e6 0 1",
+            "4k3/4n3/8/3Pp3/8/8/8/4K3 w - - 0 1",
+        ),
+    ]);
+}
+
+// 26. ... and only if at least one en passant capture is legal (Stockfish's rule, commit
+//     9417552). Otherwise the capture can never be played, so the position is the same as
+//     without the square and must hash the same, or repetitions would be missed
+#[test]
+fn en_passant_square_without_a_legal_capture_is_dropped() {
+    assert_en_passant_dropped(&[
+        // both capturers are pinned to the e4 king: d5 by the c6 bishop, f5 by the g6 bishop
+        (
+            "4k3/8/2b3b1/3PpP2/4K3/8/8/8 w - e6 0 2",
+            "4k3/8/2b3b1/3PpP2/4K3/8/8/8 w - - 0 2",
+        ),
+        // perft position 3 after e2-e4: fxe3 takes both pawns off rank 4, which opens the b4
+        // rook's line to the h4 king
+        (
+            "8/2p5/3p4/KP5r/1R2Pp1k/8/6P1/8 b - e3 0 1",
+            "8/2p5/3p4/KP5r/1R2Pp1k/8/6P1/8 b - - 0 1",
+        ),
+        // e2-e4 uncovered the d1 bishop's check on h5, and a pawn on e3 does not block it
+        (
+            "8/8/8/7k/4Pp2/8/8/K2B4 b - e3 0 1",
+            "8/8/8/7k/4Pp2/8/8/K2B4 b - - 0 1",
+        ),
+    ]);
+}
+
+// 27. the square stays when at least one capture is legal
+#[test]
+fn en_passant_square_with_a_legal_capture_is_kept() {
+    let cases = [
+        // d4 is pinned to the c5 king by the g1 bishop, but e3 is on that same diagonal
+        "8/8/8/2k5/3pP3/8/8/K5B1 b - e3 0 1",
+        // d4 is pinned on the d-file, f4 is free
+        "3k4/8/8/8/3pPp2/8/8/3R3K b - e3 0 1",
+        // the pawn that moved gives check, and capturing it ends the check
+        "8/8/8/5k2/3pP3/8/8/K7 b - e3 0 1",
+    ];
+    for fen in cases {
+        let pos = parse(fen);
+        assert_eq!(pos.en_passant(), Some(sq("e3")), "{fen}");
+        assert_eq!(pos.to_fen(), fen);
+    }
+}
+
+// 28. the side to move must not be able to capture the other king. Before the fix such a FEN
+//     was accepted, and once the king was captured, looking up its square panicked
+#[test]
+fn king_the_side_to_move_can_capture_is_rejected() {
+    // the e1 rook attacks the e8 king, White to move
+    assert_rejected(
+        "4k3/7p/8/8/8/8/8/4R1K1 w - - 0 1",
+        FenError::KingCanBeCaptured,
+    );
+    // the a1 rook attacks the e1 king, Black to move
+    assert_rejected(
+        "4k3/8/8/8/8/8/8/r3K3 b - - 0 1",
+        FenError::KingCanBeCaptured,
+    );
+    // kings side by side
+    assert_rejected("8/8/8/8/8/8/8/3Kk3 w - - 0 1", FenError::KingCanBeCaptured);
+
+    // the side to move being in check is a normal position
+    let pos = parse("4k3/7p/8/8/8/8/8/4R1K1 b - - 0 1");
+    assert!(pos.is_attacked(sq("e8"), Color::White));
+}
+
+// 29. at most 8 pawns per side
+#[test]
+fn more_than_eight_pawns_is_rejected() {
+    assert_rejected(
+        "4k3/8/8/8/8/P7/PPPPPPPP/4K3 w - - 0 1",
+        FenError::TooManyPawns,
+    );
+    assert_rejected(
+        "4k3/pppppppp/p7/8/8/8/8/4K3 w - - 0 1",
+        FenError::TooManyPawns,
+    );
+}
+
+// 30. every knight, bishop or rook beyond 2 and every queen beyond 1 is a promoted pawn, so it
+//     needs a missing pawn. Before the fix 24 queens gave 259 moves, more than the 256 a
+//     MoveList holds, and generate_moves panicked
+#[test]
+fn more_pieces_than_promotions_allow_is_rejected() {
+    // a 2nd queen while all 8 pawns are still there
+    assert_rejected(
+        "4k3/8/8/8/8/8/PPPPPPPP/QQ2K3 w - - 0 1",
+        FenError::TooManyPieces,
+    );
+    // a 3rd knight while all 8 pawns are still there
+    assert_rejected(
+        "4k3/8/8/8/8/8/PPPPPPPP/NNN1K3 w - - 0 1",
+        FenError::TooManyPieces,
+    );
+    // Black: a 3rd rook while all 8 pawns are still there
+    assert_rejected(
+        "rrr1k3/pppppppp/8/8/8/8/8/4K3 w - - 0 1",
+        FenError::TooManyPieces,
+    );
+    // 10 queens and no pawns: one more than 8 promotions allow
+    assert_rejected(
+        "kb6/pp6/8/8/8/8/QQQQQQQQ/Q3K2Q w - - 0 1",
+        FenError::TooManyPieces,
+    );
+    // 24 queens: 259 pseudo-legal moves
+    assert_rejected(
+        "QQQQQ1bk/Q4Qpp/Q5QQ/Q6Q/Q6Q/Q6Q/1Q5Q/K1QQQQQQ w - - 0 1",
+        FenError::TooManyPieces,
+    );
+
+    // the limits themselves are fine: 9 queens with no pawns, 2 queens with 7 pawns
+    parse("kb6/pp6/8/8/8/8/QQQQQQQQ/Q3K3 w - - 0 1");
+    parse("4k3/8/8/8/8/8/PPPPPPP1/QQ2K3 w - - 0 1");
+}
+
+// 31. move counters stay in Stockfish's range: a halfmove clock up to 32767, a game up to
+//     100,000 half-moves. Before the fix counters at the u16 maximum made the next move
+//     overflow and panic. A fullmove number of 0 is read as 1, as Stockfish does
+#[test]
+fn move_counters_out_of_range_are_rejected() {
+    let board = "4k3/8/8/8/8/8/8/4K3";
+    for counters in [
+        "w - - 32768 1",
+        "b - - 65535 65535",
+        "w - - 0 50002",
+        "b - - 0 50001",
+        "w - - 0 99999999999",
+    ] {
+        assert_rejected(&format!("{board} {counters}"), FenError::ClockOutOfRange);
+    }
+
+    // the largest values allowed
+    let max = format!("{board} w - - 32767 50001");
+    assert_eq!(parse(&max).to_fen(), max);
+    assert_eq!(
+        parse(&format!("{board} b - - 0 50000")).fullmove_number(),
+        50000
+    );
+    // fullmove 0 is read as 1
+    assert_eq!(
+        parse(&format!("{board} w - - 0 0")).to_fen(),
+        format!("{board} w - - 0 1")
+    );
 }

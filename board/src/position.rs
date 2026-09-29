@@ -38,8 +38,9 @@ pub struct Position {
     side_to_move: Color,
     /// Castling rights, an OR of the `WHITE_*` / `BLACK_*` flags.
     castling: u8,
-    /// The square a pawn skipped with a double push on the last move, kept only when an enemy
-    /// pawn could capture onto it (otherwise the position is the same as without it).
+    /// The square a pawn skipped with a double push on the last move, kept only when an en
+    /// passant capture onto it is legal (Stockfish's rule: otherwise the position is the same as
+    /// without it).
     en_passant: Option<u8>,
     /// Half-moves since the last capture or pawn move (50-move rule).
     halfmove_clock: u16,
@@ -85,12 +86,20 @@ pub enum FenError {
     BadEnPassant,
     /// Halfmove clock or fullmove number is not a number.
     BadClock,
+    /// Halfmove clock above 32767, or a fullmove number past 100,000 half-moves (Stockfish's
+    /// limits).
+    ClockOutOfRange,
     /// A side does not have exactly one king.
     BadKingCount,
     /// A pawn stands on rank 1 or rank 8.
     PawnOnBackRank,
-    /// A castling right whose king or rook is not on its home square.
-    CastlingWithoutPieces,
+    /// A side has more than 8 pawns.
+    TooManyPawns,
+    /// A side has more pieces than promotions can explain: every knight, bishop or rook beyond
+    /// 2 and every queen beyond 1 must be a promoted pawn, so it needs a missing pawn.
+    TooManyPieces,
+    /// The side to move attacks the other king, so it could capture it.
+    KingCanBeCaptured,
 }
 
 impl Position {
@@ -109,22 +118,41 @@ impl Position {
     };
 
     /// Parses a FEN string. Accepts 6 fields, or 4 (counters then default to `0 1`).
-    /// An en passant square that no pawn of the side to move could capture onto is dropped, the
-    /// same rule `make_move` follows, so the same position always gets the same hash.
+    ///
+    /// Which positions are accepted, and how they are cleaned up, follows Stockfish's
+    /// `Position::set`, so both engines see the same positions the same way:
+    /// - **rejected:** text that is not a FEN, a side without exactly one king, a pawn on rank 1
+    ///   or 8, more than 8 pawns or more pieces than promotions explain, a king the side to move
+    ///   could capture, and counters out of range (halfmove clock over 32767, a game over
+    ///   100,000 half-moves long);
+    /// - **dropped:** a castling right whose king or rook is not on its home square, and an en
+    ///   passant square without a legal en passant capture onto it (the same rule `make_move`
+    ///   follows, so the same position always gets the same hash);
+    /// - a fullmove number of 0 is read as 1.
+    ///
+    /// Stricter than Stockfish only on text: exactly 4 or 6 fields, counters must be numbers,
+    /// no two digits in a row in a rank, `KQkq` castling letters each at most once.
     pub fn from_fen(fen: &str) -> Result<Position, FenError> {
         let fields: Vec<&str> = fen.split_whitespace().collect();
         if fields.len() != 4 && fields.len() != 6 {
             return Err(FenError::WrongFieldCount);
         }
+        // the text first, field by field, in Stockfish's order
         let mut pos = Position::EMPTY;
         pos.parse_board(fields[0])?;
         pos.side_to_move = parse_side(fields[1])?;
-        pos.castling = parse_castling(fields[2])?;
-        pos.en_passant = parse_en_passant(fields[3], pos.side_to_move)?;
-        if let Some(ep) = pos.en_passant {
-            // the pawn that skipped `ep` belongs to the side that just moved
-            pos.en_passant = pos.usable_en_passant(ep, opponent(pos.side_to_move));
+        let castling = parse_castling(fields[2])?;
+        let en_passant = parse_en_passant(fields[3], pos.side_to_move)?;
+        if fields.len() == 6 {
+            pos.halfmove_clock = parse_halfmove_clock(fields[4])?;
+            pos.fullmove_number = parse_fullmove_number(fields[5], pos.side_to_move)?;
         }
+        // then the pieces, before anything below looks up a king
+        pos.check_material()?;
+        pos.castling = pos.rights_with_pieces_home(castling);
+        // the pawn that skipped the en passant square belongs to the side that just moved
+        pos.en_passant =
+            en_passant.and_then(|ep| pos.usable_en_passant(ep, opponent(pos.side_to_move)));
         pos.hash ^= castling_key(pos.castling);
         if let Some(sq) = pos.en_passant {
             pos.hash ^= en_passant_key(sq % 8);
@@ -132,12 +160,7 @@ impl Position {
         if pos.side_to_move == Color::Black {
             pos.hash ^= black_to_move_key();
         }
-        if fields.len() == 6 {
-            pos.halfmove_clock = parse_clock(fields[4])?;
-            pos.fullmove_number = parse_clock(fields[5])?;
-        }
-        pos.check_kings_and_pawns()?;
-        pos.check_castling_rights()?;
+        pos.check_king_cannot_be_captured()?;
         Ok(pos)
     }
 
@@ -229,7 +252,8 @@ impl Position {
         self.castling
     }
 
-    /// The en passant target square, if the last move was a double pawn push.
+    /// The en passant target square: set only right after a double pawn push, and only when an
+    /// en passant capture onto it is legal.
     pub fn en_passant(&self) -> Option<u8> {
         self.en_passant
     }
@@ -299,9 +323,9 @@ impl Position {
     /// Plays `mv`, a move `generate_moves` produced for this position, and returns what is
     /// needed to take it back. Moves the pieces (the rook too when castling, the captured pawn
     /// beside the to square for en passant, the new piece for a promotion) and updates the side
-    /// to move, castling rights, en passant square (set only when an enemy pawn could capture
-    /// onto it), move counters and hash. The move is trusted: whether it leaves the mover's king
-    /// in check is not tested here.
+    /// to move, castling rights, en passant square (set only when an en passant capture onto it
+    /// is legal, the same rule as `from_fen`), move counters and hash. The move is trusted:
+    /// whether it leaves the mover's king in check is not tested here.
     pub fn make_move(&mut self, mv: Move) -> Undo {
         let (from, to, flag) = (mv.from(), mv.to(), mv.flag());
         let us = self.side_to_move;
@@ -423,12 +447,20 @@ impl std::fmt::Display for FenError {
                 "FEN en passant must be '-' or a rank 3/6 square matching the side to move"
             ),
             FenError::BadClock => write!(f, "FEN move counters must be non-negative numbers"),
+            FenError::ClockOutOfRange => write!(
+                f,
+                "FEN halfmove clock must be at most 32767 and the game at most 100000 half-moves long"
+            ),
             FenError::BadKingCount => write!(f, "each side must have exactly one king"),
             FenError::PawnOnBackRank => write!(f, "pawns cannot stand on rank 1 or 8"),
-            FenError::CastlingWithoutPieces => write!(
+            FenError::TooManyPawns => write!(f, "a side cannot have more than 8 pawns"),
+            FenError::TooManyPieces => write!(
                 f,
-                "a castling right needs its king and rook on their home squares"
+                "a side has more pieces than its missing pawns could have promoted to"
             ),
+            FenError::KingCanBeCaptured => {
+                write!(f, "the side to move could capture the other king")
+            }
         }
     }
 }
@@ -480,12 +512,54 @@ impl Position {
         self.en_passant = square;
     }
 
-    /// `Some(ep)` if a pawn of the other side could capture onto `ep`, the square a `pusher`
-    /// pawn just skipped; `None` otherwise. Looks outwards from `ep`, like `is_attacked`: a
-    /// `pusher` pawn standing on `ep` would attack exactly the squares the capturers stand on.
+    /// `Some(ep)` if the other side can really capture en passant onto `ep`, the square a
+    /// `pusher` pawn just skipped with a double push; `None` otherwise. Stockfish's rule, so an
+    /// en passant square exists only when it changes what can be played:
+    /// - the `pusher` pawn stands just past `ep`, and `ep` and the square the pawn started from
+    ///   are empty (always true after `make_move`, but a FEN can claim anything);
+    /// - a pawn of the other side attacks `ep`. Looks outwards from `ep`, like `is_attacked`: a
+    ///   `pusher` pawn standing on `ep` would attack exactly the squares the capturers stand on;
+    /// - at least one of those captures leaves the capturer's own king safe. The capture takes
+    ///   two pawns off their squares at once, which can open a line no single move could (both
+    ///   pawns on the king's rank), so the test uses the board as it would be after the capture.
     fn usable_en_passant(&self, ep: u8, pusher: Color) -> Option<u8> {
-        let capturers = pawn_attacks(pusher, ep) & self.pieces(opponent(pusher), PieceKind::Pawn);
-        if capturers.is_empty() { None } else { Some(ep) }
+        let us = opponent(pusher);
+        // the pusher's pawn went from one square behind `ep` to one square past it
+        let pushed = (ep as i8 + 8 * pusher.forward()) as u8;
+        let started = (ep as i8 - 8 * pusher.forward()) as u8;
+        let occupied = self.occupied();
+        if !self.pieces(pusher, PieceKind::Pawn).contains(pushed)
+            || occupied.contains(ep)
+            || occupied.contains(started)
+        {
+            return None;
+        }
+        let king = self.pieces(us, PieceKind::King).lsb();
+        let capturers = pawn_attacks(pusher, ep) & self.pieces(us, PieceKind::Pawn);
+        for from in capturers {
+            // the board after `from` takes on `ep`: `from` and `pushed` empty, `ep` occupied
+            let after = (occupied ^ Bitboard::from_square(from) ^ Bitboard::from_square(pushed))
+                | Bitboard::from_square(ep);
+            // the captured pawn is gone, so it attacks nothing any more
+            let attackers = self.attackers_to(king, pusher, after) & !Bitboard::from_square(pushed);
+            if attackers.is_empty() {
+                return Some(ep);
+            }
+        }
+        None
+    }
+
+    /// Every piece of color `by` that attacks `sq`, with slider lines blocked by `occupied`
+    /// instead of the real board. Answers "would `sq` be attacked after this move?" without
+    /// making the move. The pieces themselves come from the real board, so the caller removes
+    /// any piece the move would capture.
+    fn attackers_to(&self, sq: u8, by: Color, occupied: Bitboard) -> Bitboard {
+        let queens = self.pieces(by, PieceKind::Queen);
+        (bishop_attacks(sq, occupied) & (self.pieces(by, PieceKind::Bishop) | queens))
+            | (rook_attacks(sq, occupied) & (self.pieces(by, PieceKind::Rook) | queens))
+            | (knight_attacks(sq) & self.pieces(by, PieceKind::Knight))
+            | (pawn_attacks(opponent(by), sq) & self.pieces(by, PieceKind::Pawn))
+            | (king_attacks(sq) & self.pieces(by, PieceKind::King))
     }
 
     /// Reads the FEN board field (rank 8 first, ranks split by `/`) and places the pieces.
@@ -526,26 +600,47 @@ impl Position {
         Ok(())
     }
 
-    /// Rejects boards that would break move generation: each side needs exactly one king,
-    /// and no pawn may stand on rank 1 or 8.
-    fn check_kings_and_pawns(&self) -> Result<(), FenError> {
-        for color in [Color::White, Color::Black] {
-            if self.pieces(color, PieceKind::King).count() != 1 {
-                return Err(FenError::BadKingCount);
-            }
-        }
+    /// Rejects piece sets no game can reach, in Stockfish's order: a pawn on rank 1 or 8, a side
+    /// without exactly one king, more than 8 pawns, or more pieces than promotions explain
+    /// (every knight, bishop or rook beyond 2 and every queen beyond 1 must be a promoted pawn,
+    /// so it needs a missing pawn). This also keeps move generation safe: both kings are always
+    /// there, and real-game material stays far below the 256 moves a `MoveList` holds (the
+    /// known maximum is 218).
+    fn check_material(&self) -> Result<(), FenError> {
         let pawns =
             self.pieces(Color::White, PieceKind::Pawn) | self.pieces(Color::Black, PieceKind::Pawn);
         if !(pawns & (RANK_1 | RANK_8)).is_empty() {
             return Err(FenError::PawnOnBackRank);
         }
+        for color in [Color::White, Color::Black] {
+            if self.pieces(color, PieceKind::King).count() != 1 {
+                return Err(FenError::BadKingCount);
+            }
+        }
+        for color in [Color::White, Color::Black] {
+            let count = |kind| self.pieces(color, kind).count();
+            let pawns = count(PieceKind::Pawn);
+            if pawns > 8 {
+                return Err(FenError::TooManyPawns);
+            }
+            let promoted = count(PieceKind::Knight).saturating_sub(2)
+                + count(PieceKind::Bishop).saturating_sub(2)
+                + count(PieceKind::Rook).saturating_sub(2)
+                + count(PieceKind::Queen).saturating_sub(1);
+            if promoted > 8 - pawns {
+                return Err(FenError::TooManyPieces);
+            }
+        }
         Ok(())
     }
 
-    /// Rejects castling rights whose king and rook are not on their home squares. From here
-    /// on a right means "king and rook are home and never moved": `make_move` keeps that true
-    /// by clearing rights as they move, so move generation can trust the flags.
-    fn check_castling_rights(&self) -> Result<(), FenError> {
+    /// `rights` without the castling rights whose king or rook is not on its home square. From
+    /// here on a right means "king and rook are home and never moved": `make_move` keeps that
+    /// true by clearing rights as they move, so move generation can trust the flags. Stockfish
+    /// drops such rights too, except that it reads a king or rook elsewhere on the back rank as
+    /// a Chess960 right; we only play standard chess.
+    fn rights_with_pieces_home(&self, rights: u8) -> u8 {
+        let mut kept = rights;
         for color in [Color::White, Color::Black] {
             for castle in &CASTLES[color as usize] {
                 let pieces_home = self
@@ -554,10 +649,21 @@ impl Position {
                     && self
                         .pieces(color, PieceKind::Rook)
                         .contains(castle.rook_from);
-                if self.castling & castle.right != 0 && !pieces_home {
-                    return Err(FenError::CastlingWithoutPieces);
+                if !pieces_home {
+                    kept &= !castle.right;
                 }
             }
+        }
+        kept
+    }
+
+    /// Rejects a position where the side to move attacks the other king: it could capture it,
+    /// so the other side's last move was illegal (Stockfish: "King can be captured").
+    fn check_king_cannot_be_captured(&self) -> Result<(), FenError> {
+        let them = opponent(self.side_to_move);
+        let king = self.pieces(them, PieceKind::King).lsb();
+        if self.is_attacked(king, self.side_to_move) {
+            return Err(FenError::KingCanBeCaptured);
         }
         Ok(())
     }
@@ -611,9 +717,37 @@ fn parse_en_passant(text: &str, side: Color) -> Result<Option<u8>, FenError> {
     Ok(Some(sq))
 }
 
-/// Reads a move counter (halfmove clock or fullmove number).
-fn parse_clock(text: &str) -> Result<u16, FenError> {
-    text.parse::<u16>().map_err(|_| FenError::BadClock)
+/// Largest halfmove clock a FEN may have (Stockfish's limit).
+const MAX_HALFMOVE_CLOCK: u64 = 32_767;
+
+/// Most half-moves the game may already have lasted when a FEN is read (Stockfish's limit).
+const MAX_GAME_PLY: u64 = 100_000;
+
+/// Reads the halfmove clock: a number from 0 to [`MAX_HALFMOVE_CLOCK`].
+fn parse_halfmove_clock(text: &str) -> Result<u16, FenError> {
+    let clock = parse_counter(text)?;
+    if clock > MAX_HALFMOVE_CLOCK {
+        return Err(FenError::ClockOutOfRange);
+    }
+    Ok(clock as u16)
+}
+
+/// Reads the fullmove number. As in Stockfish, 0 is read as 1, and the game so far may be at
+/// most [`MAX_GAME_PLY`] half-moves long: `2 * (fullmove - 1)`, plus 1 when Black is to move.
+fn parse_fullmove_number(text: &str, side: Color) -> Result<u16, FenError> {
+    let fullmove = parse_counter(text)?.max(1);
+    let ply = (fullmove - 1)
+        .saturating_mul(2)
+        .saturating_add((side == Color::Black) as u64);
+    if ply > MAX_GAME_PLY {
+        return Err(FenError::ClockOutOfRange);
+    }
+    Ok(fullmove as u16)
+}
+
+/// Reads a move counter: a whole number, not negative.
+fn parse_counter(text: &str) -> Result<u64, FenError> {
+    text.parse::<u64>().map_err(|_| FenError::BadClock)
 }
 
 /// The other side: Black for White, White for Black.
