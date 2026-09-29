@@ -1,7 +1,8 @@
-//! # Game-over rules (CE-257: subtasks CE-258 check, checkmate, stalemate; CE-261 material)
+//! # Game-over rules (CE-257: subtasks CE-258 check, checkmate, stalemate; CE-259 50-move rule;
+//! # CE-261 insufficient material)
 //!
-//! **What is tested.** `Position::in_check`, `is_checkmate`, `is_stalemate` and
-//! `is_insufficient_material` through the public API:
+//! **What is tested.** `Position::in_check`, `is_checkmate`, `is_stalemate`,
+//! `is_insufficient_material` and `is_fifty_move_draw` through the public API:
 //! - every piece kind can give check, to either side, and two checkers at once are check too;
 //! - no check when nothing attacks the king: pawns attack only diagonally forward, and a piece
 //!   of either color blocks a line;
@@ -16,7 +17,10 @@
 //! - insufficient material: K v K, K+N v K, K+B v K, and bishops only, all on one square color
 //!   (promoted ones too), with either side to move; everything else can still mate, even when
 //!   it cannot be forced (K+N+N v K, K+N v K+N, bishops on opposite colors); and capturing the
-//!   last pawn turns a position into a draw.
+//!   last pawn turns a position into a draw;
+//! - the 50-move rule: 100 half-moves without a capture or a pawn move is a draw (99 is not), a
+//!   pawn move or a capture resets the count, and a checkmate on the last move still wins (a
+//!   check does not stop the draw).
 //!
 //! Every check, mate and stalemate position was also checked with the `chess` crate (game
 //! status, number of checking pieces, legal moves) before this file was written, so a failure
@@ -320,4 +324,46 @@ fn capturing_the_last_pawn_leaves_insufficient_material() {
     assert!(!pos.is_insufficient_material());
     play(&mut pos, "f2e4");
     assert!(pos.is_insufficient_material(), "{}", pos.to_fen());
+}
+
+// ---------- 50-move rule (CE-259) ----------
+
+// 13. 100 half-moves (50 moves each) without a capture or a pawn move are a draw: at 99 it is
+//     not, one more quiet move makes it one; a FEN can also start at 100 or past it
+#[test]
+fn fifty_moves_without_a_capture_or_pawn_move_are_a_draw() {
+    let mut pos = parse("8/8/8/4k3/8/8/8/R3K3 w - - 99 80");
+    assert!(!pos.is_fifty_move_draw());
+    play(&mut pos, "a1a2");
+    assert!(pos.is_fifty_move_draw(), "{}", pos.to_fen());
+    for clock in [100, 150] {
+        let fen = format!("8/8/8/4k3/8/8/8/R3K3 w - - {clock} 80");
+        assert!(parse(&fen).is_fifty_move_draw(), "{fen}");
+    }
+}
+
+// 14. a pawn move or a capture on the 100th half-move resets the count: no draw
+#[test]
+fn a_pawn_move_or_capture_resets_the_fifty_move_count() {
+    for text in ["e2e3", "a1a5"] {
+        let mut pos = parse("8/8/8/r3k3/8/8/4P3/R3K3 w - - 99 80");
+        play(&mut pos, text);
+        assert!(!pos.is_fifty_move_draw(), "{text}: {}", pos.to_fen());
+    }
+}
+
+// 15. a checkmate on the 100th half-move still wins: mate comes first. A check the king can
+//     escape from does not stop the draw.
+#[test]
+fn checkmate_on_the_last_move_beats_the_fifty_move_rule() {
+    let mut mate = parse("6k1/5ppp/8/8/8/8/8/R5K1 w - - 99 80");
+    play(&mut mate, "a1a8");
+    assert!(mate.is_checkmate(), "{}", mate.to_fen());
+    assert!(!mate.is_fifty_move_draw(), "{}", mate.to_fen());
+
+    // without the h7 pawn the king escapes to h7
+    let mut check = parse("6k1/5pp1/8/8/8/8/8/R5K1 w - - 99 80");
+    play(&mut check, "a1a8");
+    assert!(check.in_check(), "{}", check.to_fen());
+    assert!(check.is_fifty_move_draw(), "{}", check.to_fen());
 }

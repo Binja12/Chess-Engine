@@ -1,5 +1,6 @@
 //! Game-over rules: whether the side to move is in check, checkmated or stalemated, and whether
-//! the pieces left can still give checkmate at all.
+//! the game is drawn by the 50-move rule or because the pieces left can no longer give
+//! checkmate.
 //!
 //! A child module of `position`: these are methods on [`Position`] like the ones in
 //! `position.rs`, kept in their own file, and they may use that module's private helpers.
@@ -13,6 +14,9 @@ use crate::{
 const DARK_SQUARES: Bitboard = Bitboard {
     bits: 0xAA55_AA55_AA55_AA55,
 };
+
+/// Half-moves without a capture or a pawn move after which the game is drawn: 50 moves each.
+const FIFTY_MOVE_LIMIT: u16 = 100;
 
 impl Position {
     /// True if the king of the side to move is attacked. Only that king can be: in a legal
@@ -69,6 +73,14 @@ impl Position {
         // only bishops, all on squares of one color
         knights.is_empty()
             && ((bishops & DARK_SQUARES).is_empty() || (bishops & !DARK_SQUARES).is_empty())
+    }
+
+    /// True if 50 moves by each side (100 half-moves) went by without a capture or a pawn move:
+    /// the game is a draw. A checkmate on that last move still wins (FIDE's rule, and
+    /// Stockfish's), so once the count is reached this also checks for mate, which tries moves
+    /// with make/unmake (hence `&mut self`).
+    pub fn is_fifty_move_draw(&mut self) -> bool {
+        self.halfmove_clock() >= FIFTY_MOVE_LIMIT && !self.is_checkmate()
     }
 }
 
