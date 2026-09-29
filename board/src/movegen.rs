@@ -1,7 +1,7 @@
 //! Pseudo-legal move generation: every move the side to move could make, ignoring whether it
-//! leaves its own king in check (that filter is CE-8).
+//! leaves its own king in check. [`legal_moves`] filters them down to the legal ones (CE-8).
 //!
-//! There is one entry point, [`generate_moves`]. Its [`MoveGen`] config says which moves to
+//! The main entry point is [`generate_moves`]. Its [`MoveGen`] config says which moves to
 //! produce: which piece kinds, noisy moves (captures and promotions) and/or quiet moves, and which
 //! destination squares. Engines combine these in their own crates without changing this one: a
 //! search asks for [`MoveGen::CAPTURES`] first and for [`MoveGen::QUIETS`] only if it still needs
@@ -346,6 +346,21 @@ pub fn generate_moves(pos: &Position, config: MoveGen) -> MoveList {
         pawn_moves(pos, config, &mut list);
     }
     list
+}
+
+/// Every legal move of `pos`: the moves [`generate_moves`] gives with [`MoveGen::ALL`], keeping
+/// only those that do not leave the mover's own king attacked ([`Position::is_legal`]). Takes
+/// `&mut Position` because each move is played and taken back to check it; afterwards `pos` is
+/// exactly as before. For perft, checking a move sent over UCI, the random engine, and finding
+/// checkmate and stalemate.
+pub fn legal_moves(pos: &mut Position) -> MoveList {
+    let mut legals = MoveList::new();
+    for &mv in generate_moves(pos, MoveGen::ALL).as_slice() {
+        if pos.is_legal(mv) {
+            legals.push(mv);
+        }
+    }
+    legals
 }
 
 // ---------- helpers ----------

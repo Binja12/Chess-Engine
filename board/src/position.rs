@@ -419,6 +419,17 @@ impl Position {
         self.halfmove_clock = undo.halfmove_clock;
         self.hash = undo.hash;
     }
+
+    /// True if `mv`, a move `generate_moves` produced for this position, does not leave the
+    /// mover's own king attacked. Plays the move, looks, and takes it back, so the position is
+    /// unchanged afterwards: `&mut self` is needed only for that moment.
+    pub fn is_legal(&mut self, mv: Move) -> bool {
+        let us = self.side_to_move();
+        let undo = self.make_move(mv);
+        let attacked = self.is_attacked(self.pieces(us, PieceKind::King).lsb(), self.side_to_move);
+        self.unmake_move(mv, undo);
+        !attacked
+    }
 }
 
 /// Lets a position be parsed with `"...".parse::<Position>()`, the same as `from_fen`.
