@@ -71,6 +71,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine-random"
+version = "0.1.0"
+dependencies = [
+ "board",
+ "engine-api",
+]
+
+[[package]]
 name = "failure"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

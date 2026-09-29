@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["board", "engine-api"]
+members = ["board", "engine-api", "engine-random"]
 
 [workspace.package]
 edition = "2024"
