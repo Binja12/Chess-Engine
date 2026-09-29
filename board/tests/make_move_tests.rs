@@ -5,10 +5,11 @@
 //!   and unmake gives back exactly the original position, hash included;
 //! - castling rights: king moves, rook moves, a rook captured on its corner, a rook that leaves
 //!   and comes back;
-//! - move counters, side to move, and the en passant square (set only when an enemy pawn could
-//!   capture onto it);
+//! - move counters, side to move, and the en passant square (set only when an en passant capture
+//!   is legal, Stockfish's rule, the same one `from_fen` uses);
 //! - the hash: transpositions hash equal, and after every move the incrementally kept hash
-//!   equals a from-scratch recomputation and the hash of the same position parsed from its FEN;
+//!   equals a from-scratch recomputation and the hash of the same position parsed from its FEN
+//!   (after a move that left the mover's king attacked, that FEN must be rejected instead);
 //! - the CE-7 "done when": 10,000 random move sequences, each taken back move by move, restore
 //!   the position exactly.
 //!
@@ -19,7 +20,7 @@ use board::color::Color;
 use board::movegen::{MoveGen, generate_moves};
 use board::moves::Move;
 use board::piece::PieceKind;
-use board::position::{Position, START_FEN, Undo};
+use board::position::{FenError, Position, START_FEN, Undo};
 
 /// Small deterministic random generator for the random sequences (xorshift64, the same algorithm
 /// the crate uses internally, which is not public). A fixed seed gives the same sequences on
@@ -96,11 +97,23 @@ fn find_move(pos: &Position, text: &str) -> Move {
 
 /// Checks everything `make_move` keeps up to date incrementally: the hash equals a from-scratch
 /// recomputation and the hash of the same position parsed from its FEN, and the 12 bitboards,
-/// the color sets and the mailbox agree.
+/// the color sets and the mailbox agree. After a pseudo-legal move that left the mover's own
+/// king attacked, the side to move could capture that king, so `from_fen` must reject the FEN
+/// instead.
 fn assert_consistent(pos: &Position) {
     let fen = pos.to_fen();
     assert_eq!(pos.hash(), pos.compute_hash(), "hash vs recomputed: {fen}");
-    assert_eq!(pos.hash(), parse(&fen).hash(), "hash vs FEN: {fen}");
+    let mover = other(pos.side_to_move());
+    let mover_king = pos.pieces(mover, PieceKind::King).lsb();
+    if pos.is_attacked(mover_king, pos.side_to_move()) {
+        assert_eq!(
+            Position::from_fen(&fen).err(),
+            Some(FenError::KingCanBeCaptured),
+            "illegal move, FEN must be rejected: {fen}"
+        );
+    } else {
+        assert_eq!(pos.hash(), parse(&fen).hash(), "hash vs FEN: {fen}");
+    }
 
     let mut all = Bitboard::EMPTY;
     for color in COLORS {
@@ -195,6 +208,36 @@ fn double_push_sets_en_passant_only_when_capturable() {
         "4k3/8/8/p7/8/8/7P/4K3 w - - 0 1",
         "h2h4",
         "4k3/8/8/p7/7P/8/8/4K3 b - - 0 1",
+    );
+}
+
+// 2b. ... and only when at least one en passant capture is legal (Stockfish's rule, the same
+//     one from_fen uses, so the position hashes the same as its FEN)
+#[test]
+fn double_push_sets_en_passant_only_when_a_capture_is_legal() {
+    // e7-e5: the d5 and f5 pawns could take on e6, but both are pinned to the e4 king
+    assert_make_unmake(
+        "4k3/4p3/2b3b1/3P1P2/4K3/8/8/8 b - - 0 1",
+        "e7e5",
+        "4k3/8/2b3b1/3PpP2/4K3/8/8/8 w - - 0 2",
+    );
+    // perft position 3, e2-e4: fxe3 would open the b4 rook's line to the h4 king
+    assert_make_unmake(
+        "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+        "e2e4",
+        "8/2p5/3p4/KP5r/1R2Pp1k/8/6P1/8 b - - 0 1",
+    );
+    // e2-e4 uncovers the d1 bishop's check on h5, which fxe3 does not block
+    assert_make_unmake(
+        "8/8/8/7k/5p2/8/4P3/K2B4 w - - 0 1",
+        "e2e4",
+        "8/8/8/7k/4Pp2/8/8/K2B4 b - - 0 1",
+    );
+    // one legal capture is enough: d4 is pinned on the d-file, f4 is free
+    assert_make_unmake(
+        "3k4/8/8/8/3p1p2/8/4P3/3R3K w - - 0 1",
+        "e2e4",
+        "3k4/8/8/8/3pPp2/8/8/3R3K b - e3 0 1",
     );
 }
 

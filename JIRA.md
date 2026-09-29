@@ -7,7 +7,7 @@ Conventions
 - **Bug** = separate issue type, linked to its epic, closed only when a regression test passes.
 - Story points are rough: 1 = an evening, 3 = a few days, 5 = a week.
 
-Order of epics is the order of work. E2 stories 2.2–2.6 (own bitboards) can be scheduled right after 2.1 or deferred until after E5, depending on the move-generation decision.
+Order of epics is the order of work.
 
 ---
 
@@ -34,8 +34,9 @@ Done when: Rust Book chapters 1–10 read; a small scratch program using structs
 
 ## E2 – Board and move generation
 
-**CE-4 Board interface and library adapter** (3)
-Done when: the `board` crate exposes our own `Position`, `Move`, `legal_moves()`, `make()/unmake()`, piece bitboards, and `hash()`; nothing outside the crate can see the underlying library; perft to depth 4 matches reference numbers through our interface.
+**CE-4 Board interface and library adapter** (3) — *closed, superseded*
+Closed 2026-09-29 without an adapter: move generation is our own (PLAN.md §2), so there is no library to hide. The types, the `Position` API and the FEN round-trip test were built in CE-7; `legal_moves()` and perft are in CE-8.
+Original done when: the `board` crate exposes our own `Position`, `Move`, `legal_moves()`, `make()/unmake()`, piece bitboards, and `hash()`; nothing outside the crate can see the underlying library; perft to depth 4 matches reference numbers through our interface.
 - Define `Square`, `Piece`, `Color`, `Move` (u16 encoding) types
 - Define the `Position` API
 - Adapter over the library
@@ -65,13 +66,22 @@ Done when: FEN round-trips; make followed by unmake restores the position and ha
 - Make/unmake with undo record
 - Round-trip test
 
+**Bug CE-256 FEN handling like Stockfish** — *branch `CE-256-align-fen-with-stockfish`, merged before CE-8*
+Done when: `from_fen` accepts and cleans up the same positions as Stockfish's `Position::set`, and every FEN that used to crash or corrupt the position has a regression test. `from_fen` rejects more than 8 pawns, more pieces than promotions explain, a king the side to move could capture, and counters out of range; it drops castling rights without their king and rook, and en passant squares without a legal en passant capture (`make_move` follows the same en passant rule after a double push, so the same position always has the same hash and repetitions count correctly). Before the fix, such FENs panicked (en passant with no pawn, a captured king, a 256-move list overflow, counter overflow) or silently corrupted the position (en passant onto an occupied square).
+
 **CE-8 Legality and perft gate** (5)
-Done when: perft matches on all reference positions (start, Kiwipete, positions 3–6) to depth 5; move lists equal the library oracle on 10,000 random positions; nodes/second recorded in the PR description (copied into CHANGELOG when it starts in CE-12).
+Done when: perft matches on all reference positions (start, Kiwipete, positions 3–6) to depth 5; move lists equal the `chess` crate oracle (a dev-dependency, used only in tests) on 10,000 random positions; nodes/second recorded in the PR description (copied into CHANGELOG when it starts in CE-12).
 - Legal filter (king-attacked check)
 - Perft with divide output
 - Reference position tests
 - Oracle comparison test
-- Swap own board in behind the CE-4 interface
+
+**CE-257 Game-over rules** (3)
+Done when: tests on hand-picked positions and move sequences detect checkmate, stalemate, the 50-move rule, threefold repetition and insufficient material, all as queries on `Position`.
+- `in_check`, checkmate and stalemate (built on CE-8's legal moves)
+- 50-move rule (from `halfmove_clock`)
+- Hash history in `Position` and threefold repetition (the en passant rule it relies on is done in the FEN bug fix CE-256: a position whose only en passant captures are illegal has the same hash as without the square): the start position counts as the first occurrence, then every position reached by a move; anything before the start position is unknown and never counted
+- Insufficient material
 
 ---
 
@@ -79,7 +89,7 @@ Done when: perft matches on all reference positions (start, Kiwipete, positions 
 
 **CE-9 Engine trait and random engine** (1)
 Done when: `Engine` trait exists; a random-move engine implements it; a test plays it against itself to game end without panicking.
-- `Engine` trait: `set_position`, `best_move(limits)`, `evaluate`, `top_moves(n)`, `stop`
+- `Engine` trait: `set_position(start, moves: &[Move])`, `best_move(limits)`, `evaluate`, `top_moves(n)`, `stop`; `moves` is empty (`&[]`) for a bare FEN, e.g. a puzzle
 - `SearchLimits` (depth, nodes, time)
 - Random engine + self-play test
 

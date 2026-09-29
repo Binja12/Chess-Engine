@@ -34,8 +34,8 @@ Cargo workspace with one crate per responsibility. Every engine implements the s
 chess-engine/
 ├── Cargo.toml                 workspace
 ├── crates/
-│   ├── board/                 own bitboards: Position, Move, attack tables (magic bitboards), legal move gen, make/unmake, FEN, Zobrist hash, perft
-│   ├── engine-api/            trait Engine { set_position, best_move(limits), evaluate, top_moves(n), stop }
+│   ├── board/                 own bitboards: Position, Move, attack tables (magic bitboards), legal move gen, make/unmake, FEN, Zobrist hash, perft, game-over rules (mate, stalemate, 50-move, threefold, insufficient material)
+│   ├── engine-api/            trait Engine { set_position(start, moves: &[Move]), best_move(limits), evaluate, top_moves(n), stop }
 │   ├── engine-ab/             Engine A: alpha-beta search + hand-written evaluation + A* mate finder
 │   ├── engine-nn/             Engine B: neural-net evaluation (Rust inference), reuses engine-ab search
 │   ├── uci/                   binary: wraps any Engine in the UCI protocol (stdin/stdout)
