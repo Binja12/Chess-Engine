@@ -1,8 +1,9 @@
 //! # Game-over rules (CE-257: subtasks CE-258 check, checkmate, stalemate; CE-259 50-move rule;
-//! # CE-261 insufficient material)
+//! # CE-260 threefold repetition; CE-261 insufficient material)
 //!
 //! **What is tested.** `Position::in_check`, `is_checkmate`, `is_stalemate`,
-//! `is_insufficient_material` and `is_fifty_move_draw` through the public API:
+//! `is_insufficient_material`, `is_fifty_move_draw` and `is_threefold_repetition` through the
+//! public API:
 //! - every piece kind can give check, to either side, and two checkers at once are check too;
 //! - no check when nothing attacks the king: pawns attack only diagonally forward, and a piece
 //!   of either color blocks a line;
@@ -20,12 +21,18 @@
 //!   last pawn turns a position into a draw;
 //! - the 50-move rule: 100 half-moves without a capture or a pawn move is a draw (99 is not), a
 //!   pawn move or a capture resets the count, and a checkmate on the last move still wins (a
-//!   check does not stop the draw).
+//!   check does not stop the draw);
+//! - threefold repetition: the start position is the first occurrence; castling rights and a
+//!   legal en passant capture make positions different, an en passant square without a legal
+//!   capture does not; `unmake_move` takes a position back out of the history; nothing before
+//!   the FEN counts.
 //!
 //! Every check, mate and stalemate position was also checked with the `chess` crate (game
 //! status, number of checking pieces, legal moves) before this file was written, so a failure
-//! points at the implementation, not at the test. The `chess` crate has no insufficient material
-//! rule; those cases follow FIDE's dead-position rule (no sequence of legal moves can mate).
+//! points at the implementation, not at the test. So were the repetition sequences (its
+//! `Game::can_declare_draw`), except the one with an illegal en passant capture, where the crate
+//! differs from FIDE (see test 18). The `chess` crate has no insufficient material rule; those
+//! cases follow FIDE's dead-position rule (no sequence of legal moves can mate).
 //!
 //! Run only these tests with `cargo test -p board --test game_over_tests`.
 
@@ -42,6 +49,9 @@ const FOOLS_MATE: &str = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQk
 /// Stalemate although Black still has a knight: the e4 bishop pins it to the king, and the
 /// king's other squares (a7, b8) are covered by the b6 pawn and the c7 king.
 const PINNED_KNIGHT_STALEMATE: &str = "k7/1nK5/1P6/8/4B3/8/8/8 b - - 0 1";
+
+/// The knights go out and come back: after these 4 moves the position is the same as before.
+const KNIGHT_DANCE: [&str; 4] = ["g1f3", "g8f6", "f3g1", "f6g8"];
 
 /// Parses a FEN that the test knows is valid.
 fn parse(fen: &str) -> Position {
@@ -366,4 +376,107 @@ fn checkmate_on_the_last_move_beats_the_fifty_move_rule() {
     play(&mut check, "a1a8");
     assert!(check.in_check(), "{}", check.to_fen());
     assert!(check.is_fifty_move_draw(), "{}", check.to_fen());
+}
+
+// ---------- threefold repetition (CE-260) ----------
+
+// 16. the start position counts as the first occurrence: after the knights go out and come back
+//     twice, it is on the board for the third time. Nothing before that is a draw.
+#[test]
+fn threefold_repetition_counts_the_start_position() {
+    let mut pos = parse(START_FEN);
+    assert!(!pos.is_threefold_repetition());
+    for round in 1..=2 {
+        for text in KNIGHT_DANCE {
+            play(&mut pos, text);
+            let third_time = round == 2 && text == "f6g8";
+            assert_eq!(
+                pos.is_threefold_repetition(),
+                third_time,
+                "round {round}, after {text}"
+            );
+        }
+    }
+}
+
+// 17. the same pieces with different castling rights are a different position: the kings step
+//     aside and back, which ends both sides' rights. After two rounds the first position's
+//     pieces stand there for the third time, but only twice without castling rights; the third
+//     round makes it a draw.
+#[test]
+fn lost_castling_rights_make_a_different_position() {
+    let mut pos = parse("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1");
+    for round in 1..=3 {
+        for text in ["e1f1", "e8f8", "f1e1", "f8e8"] {
+            play(&mut pos, text);
+        }
+        assert_eq!(pos.is_threefold_repetition(), round == 3, "round {round}");
+    }
+}
+
+// 18. after d7-d5 the position is different from the same pieces later only if White can really
+//     take en passant: the en passant square is kept only then (CE-256). With the king on h4
+//     exd6 is legal, so the knights need three rounds; with the king on h5 exd6 would open the
+//     a5 rook's line to the king, so two rounds are enough. (The `chess` crate keeps the square
+//     whenever a pawn stands next to it, so it needs three rounds in both; FIDE counts positions
+//     with the same possible moves as the same position.)
+#[test]
+fn only_a_legal_en_passant_capture_makes_a_position_different() {
+    let cases = [
+        ("exd6 is legal", "1n2k3/3p4/8/r3P3/7K/8/8/1N6 b - - 0 1", 3),
+        (
+            "exd6 is illegal",
+            "1n2k3/3p4/8/r3P2K/8/8/8/1N6 b - - 0 1",
+            2,
+        ),
+    ];
+    for (why, fen, draw_after) in cases {
+        let mut pos = parse(fen);
+        play(&mut pos, "d7d5");
+        for round in 1..=3 {
+            for text in ["b1c3", "b8c6", "c3b1", "c6b8"] {
+                play(&mut pos, text);
+            }
+            let expected = round >= draw_after;
+            assert_eq!(
+                pos.is_threefold_repetition(),
+                expected,
+                "{why}, round {round}"
+            );
+        }
+    }
+}
+
+// 19. unmake_move takes the position back out of the history: one move back from the third
+//     occurrence it is no longer a draw, and the same move makes it one again
+#[test]
+fn unmake_takes_the_position_out_of_the_history() {
+    let mut pos = parse(START_FEN);
+    for text in KNIGHT_DANCE {
+        play(&mut pos, text);
+    }
+    for text in &KNIGHT_DANCE[..3] {
+        play(&mut pos, text);
+    }
+    let last = find_move(&mut pos, "f6g8");
+    let undo = pos.make_move(last);
+    assert!(pos.is_threefold_repetition());
+    pos.unmake_move(last, undo);
+    assert!(!pos.is_threefold_repetition());
+    pos.make_move(last);
+    assert!(pos.is_threefold_repetition());
+}
+
+// 20. the history starts at the FEN: what came before it is unknown and never counted, even
+//     when the halfmove clock (8) says the knights may already have danced twice
+#[test]
+fn the_history_starts_at_the_fen() {
+    let mut pos = parse("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 8 5");
+    assert!(!pos.is_threefold_repetition());
+    for round in 1..=2 {
+        for text in KNIGHT_DANCE {
+            play(&mut pos, text);
+        }
+        assert_eq!(pos.is_threefold_repetition(), round == 2, "round {round}");
+    }
 }

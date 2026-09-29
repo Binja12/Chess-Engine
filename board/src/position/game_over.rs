@@ -1,6 +1,6 @@
 //! Game-over rules: whether the side to move is in check, checkmated or stalemated, and whether
-//! the game is drawn by the 50-move rule or because the pieces left can no longer give
-//! checkmate.
+//! the game is drawn by the 50-move rule, by threefold repetition, or because the pieces left
+//! can no longer give checkmate.
 //!
 //! A child module of `position`: these are methods on [`Position`] like the ones in
 //! `position.rs`, kept in their own file, and they may use that module's private helpers.
@@ -73,6 +73,31 @@ impl Position {
         // only bishops, all on squares of one color
         knights.is_empty()
             && ((bishops & DARK_SQUARES).is_empty() || (bishops & !DARK_SQUARES).is_empty())
+    }
+
+    /// True if this position has been on the board at least twice before (three times in all):
+    /// the game is a draw. Two positions are the same when the same side is to move, with the
+    /// same pieces on the same squares, the same castling rights and the same en passant
+    /// captures, which is exactly when their hashes are equal (an en passant square is only kept
+    /// when a capture onto it is legal).
+    ///
+    /// Only positions since the start position count: the one `from_fen` read is the first
+    /// occurrence, then every position reached by `make_move`. Whatever came before the FEN is
+    /// unknown.
+    pub fn is_threefold_repetition(&self) -> bool {
+        let current = self.hash();
+        // a capture or a pawn move cannot be undone, so only the positions since the last one
+        // (`halfmove_clock` of them) can equal this one; of those, only every second one has
+        // the same side to move: 2, 4, 6... half-moves ago
+        let reversible = (self.halfmove_clock() as usize).min(self.history.len());
+        let repeats = self.history[self.history.len() - reversible..]
+            .iter()
+            .rev()
+            .skip(1)
+            .step_by(2)
+            .filter(|&&earlier| earlier == current)
+            .count();
+        repeats >= 2
     }
 
     /// True if 50 moves by each side (100 half-moves) went by without a capture or a pawn move:
